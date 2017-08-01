@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 import cv2
 
+median_filter_rows = 2
+
 with open("exp.json", "r") as f:
 	exp_overlaps = json.load(f)
 	exp_overlaps = {float(k):float(v) for k,v in exp_overlaps.items()}
@@ -51,10 +53,11 @@ def expected_overlap(target_hd):
 		elif target_hd_r > max(exp_overlaps.keys()):
 			exp_overlap = max(exp_overlaps.values())
 	return exp_overlap
-	
+
 class Template(object):
 	def __init__(self, array):
 		self._template = array
+		self._mask = None
 
 	def flip_row(self, row):
 		pass
@@ -117,36 +120,39 @@ class Template(object):
 			self._template[i:i+num_rows] = majority
 
 	def expand(self, factor):
-		return np.repeat(iris_code, factor, axis=0)
+		self._template = np.repeat(self._template, factor, axis=0)
 
-	def size(self):
-		return self._template.size
-
-	def shape(self):
-		return self._template.shape
+	def remove_top_and_bottom_rows(self, rows):
+		self._template = self._template[rows:-rows]
 
 	def medfilt(self):
 		self._template = medfilt(self._template).astype(np.int_)
 
 	def hamming_distance(self, other, rotations=0, cut_rows=None):
 		'''Fractional Hamming distance of two iris-codes.'''
-		if cut_rows:
-			self._template = self._template[config.extra_rows_for_median_filter:-config.extra_rows_for_median_filter]
-			other._template = other._template[config.extra_rows_for_median_filter:-config.extra_rows_for_median_filter]
-		assert self.size() == other.size(), (self.shape(), other.shape())
+		assert self._template.size == other._template.size, (self._template.shape, other._template.shape)
 		best_rotation = 0
-		min_hd = hd = np.count_nonzero(self._template != other._template) / self.size()
+		if cut_rows:
+			min_hd = hd = np.count_nonzero(self._template[cut_rows:-cut_rows] != other._template[cut_rows:-cut_rows]) / self._template[cut_rows:-cut_rows].size
+		else:
+			min_hd = hd = np.count_nonzero(self._template != other._template) / self._template.size
 		hds = []
 		if rotations:
 			for rotation in range(-rotations, rotations+1):
 				other_rot = copy.deepcopy(other)
 				other_rot.shift(rotation)
-				hd = np.count_nonzero(self._template != other_rot._template) / self.size()
+				if cut_rows:
+					hd = np.count_nonzero(self._template[cut_rows:-cut_rows] != other_rot._template[cut_rows:-cut_rows]) / self._template[cut_rows:-cut_rows].size
+				else:
+					hd = np.count_nonzero(self._template != other_rot._template) / self._template.size
 				hds.append((rotation, hd))
 				if hd < min_hd:
 					min_hd = hd
 					best_rotation = rotation
 		return min_hd, best_rotation, hds
+
+	def add_noise(self):
+		pass
 
 	@classmethod
 	def create(cls, rows, columns, average_sequence_size_mu, average_sequence_size_sigma):
@@ -160,22 +166,8 @@ class Template(object):
 			i += length
 			current ^= 1
 		initial_row = [np.concatenate(parts)[:columns]]
-		reference = np.repeat(initial_row, rows + 4, axis=0)
+		reference = np.repeat(initial_row, rows + 2 * median_filter_rows, axis=0)
 		return cls(reference)
-
-reference_generation_hd = 0.4625
-temp_ic = Template.create(32, 512, 6.5, 0.25)
-temp_ic.shift(np.random.randint(10, 512 // 2))
-temp_ic.initial_zigzag()
-seqs = temp_ic.find_sequences_of_all(1)
-target_hd = float(weibull(10))
-exp_overlap = expected_overlap(target_hd)
-i_hd = (target_hd + exp_overlap) / 2
-b_hd = reference_generation_hd - i_hd
-
-print ("T-HD:", target_hd)
-print ("I-HD:", i_hd)
-print ("B-HD:", b_hd)
 
 def to_file(iris_code: np.ndarray, path: Path) -> None:
 	'''Saves an iris-code to a text file.'''
@@ -197,11 +189,11 @@ def show(image: np.ndarray) -> None:
 	cv2.waitKey(0)
 	cv2.destroyAllWindows()
 
-def flip_barcode(temp_ic):
+def flip_barcode(temp_ic, barcode_hd):
 	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
 	hd = 0.0
 	barcode = copy.deepcopy(temp_ic)
-	while not (math.isclose(hd, b_hd, abs_tol=0.025) or b_hd < hd):
+	while not (math.isclose(hd, barcode_hd, abs_tol=0.025) or barcode_hd < hd):
 		temp_ic.majority_vote()
 		for i in range(temp_ic._template.shape[0]):
 			previous_b = int(temp_ic._template[i][0])
@@ -214,13 +206,61 @@ def flip_barcode(temp_ic):
 		test_ic._template.flat[flip_indices] ^= 1
 		test_ic._template = medfilt(test_ic._template).astype(np.int_)
 		test_ic.medfilt()
-		hd, _, _ = barcode.hamming_distance(test_ic, 0)
+		hd, _, _ = barcode.hamming_distance(test_ic, 0, cut_rows=median_filter_rows)
 	return test_ic
 
-temp_ic = flip_barcode(temp_ic)
-#to_image(temp_ic._template)
-reference, probe = copy.deepcopy(temp_ic), copy.deepcopy(temp_ic)
+def flip_templates(temp_ic, template_hd):
+	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
+	hd = 0.0
+	reference, probe = copy.deepcopy(temp_ic), copy.deepcopy(temp_ic)
+	while not (math.isclose(hd, template_hd, abs_tol=0.005) or template_hd < hd):
+		reference.majority_vote()
+		probe.majority_vote()
+		for i in range(reference._template.shape[0]):
+			previous_b = int(reference._template[i][0])
+			for j, b in enumerate(reference._template[i][1:-1], start=1):
+				reference.flip_edge(i, j, previous_b, b, gspace[i])
+				previous_b = b
+		for i in range(probe._template.shape[0]):
+			previous_b = int(probe._template[i][0])
+			for j, b in enumerate(probe._template[i][1:-1], start=1):
+				probe.flip_edge(i, j, previous_b, b, gspace[i])
+				previous_b = b
+		test_reference = copy.deepcopy(reference)
+		test_probe = copy.deepcopy(probe)
+		test_reference.medfilt()
+		test_probe.medfilt()
+		hd, _, _ = test_reference.hamming_distance(test_probe, 0, cut_rows=median_filter_rows)
+	return test_reference, test_probe, hd
 
-# probe reference flipping
+reference_generation_hd = 0.4625
 
+temp_ic = Template.create(32, 512, 6.5, 0.25)
+temp_ic.shift(np.random.randint(10, 512 // 2))
+temp_ic.initial_zigzag()
+seqs = temp_ic.find_sequences_of_all(1)
+target_hd = float(weibull(5))
+exp_overlap = expected_overlap(target_hd)
+i_hd = (target_hd + exp_overlap) / 2
+b_hd = reference_generation_hd - i_hd
+
+print ("T-HD:", target_hd)
+print ("I-HD:", i_hd)
+print ("B-HD:", b_hd)
+temp_ic = flip_barcode(temp_ic, b_hd)
+
+reference, probe, a_hd = flip_templates(temp_ic, target_hd)
+
+noise_hd = target_hd - a_hd
+print ("A-HD:", a_hd)
+print ("BR-HD:", temp_ic.hamming_distance(reference)[0])
+print ("BP-HD:", temp_ic.hamming_distance(probe)[0])
+print ("N-HD:", noise_hd)
+for ic in (temp_ic, reference, probe):
+	ic.remove_top_and_bottom_rows(median_filter_rows)
+	ic.expand(2)
+print (probe.shape())
+to_image(temp_ic._template, "b.bmp")
+to_image(reference._template, "r.bmp")
+to_image(probe._template, "p.bmp")
 quit()
