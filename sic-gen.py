@@ -5,12 +5,14 @@ import json
 from scipy.signal import medfilt
 import copy
 import math
+from pathlib import Path
+import cv2
 
 with open("exp.json", "r") as f:
 	exp_overlaps = json.load(f)
 	exp_overlaps = {float(k):float(v) for k,v in exp_overlaps.items()}
 
-class IrisCodeGenerator2(object):
+class IrisCodeGenerator(object):
 	def __init__(self, to_produce, probes_per_subject):
 		if not isinstance(to_produce, int) or to_produce < 0:
 			raise ValueError("Number of generated iris codes must be a positive integer, instead got:", to_produce)
@@ -57,14 +59,14 @@ class Template(object):
 	def flip_row(self, row):
 		pass
 
-	def flip_edge(self, previous_bit, current_bit, flip_chance):
-		if previous_b == 1 and b == 0:
+	def flip_edge(self, i, j, previous_bit, current_bit, flip_chance):
+		if previous_bit == 1 and current_bit == 0:
 			if np.random.rand() < flip_chance:
 				if np.random.rand() < 0.5:
 					self._template[i][j] = 1 # grow
 				else:
 					self._template[i][j-1] = 0 # shrink
-		elif previous_b == 0 and b == 1:
+		elif previous_bit == 0 and current_bit == 1:
 			if np.random.rand() < flip_chance:
 				if np.random.rand() < 0.5:
 					self._template[i][j] = 0 # grow
@@ -89,13 +91,13 @@ class Template(object):
 			sequence_length = end_index - start_index
 			if sequence_length > split_threshold:
 				mid = int(np.rint((np.mean([start_index, end_index]))))
-				flip_range(row, mid-2, mid+3)
+				self.flip_range(row, mid-2, mid+3)
 
-	def flip_range(row, start_index, end_index):
+	def flip_range(self, row, start_index, end_index):
 		'''Flips the value of a range of indices in a row.'''
 		row[start_index:end_index] ^= 1
 
-	def set_range(row, start_index, end_index, value):
+	def set_range(self, row, start_index, end_index, value):
 		'''Sets a range of indices in a row to the given value.'''
 		row[start_index:end_index] = value
 
@@ -123,20 +125,23 @@ class Template(object):
 	def shape(self):
 		return self._template.shape
 
+	def medfilt(self):
+		self._template = medfilt(self._template).astype(np.int_)
+
 	def hamming_distance(self, other, rotations=0, cut_rows=None):
 		'''Fractional Hamming distance of two iris-codes.'''
 		if cut_rows:
 			self._template = self._template[config.extra_rows_for_median_filter:-config.extra_rows_for_median_filter]
 			other._template = other._template[config.extra_rows_for_median_filter:-config.extra_rows_for_median_filter]
-		assert self.size == other.size, (self.shape, other.shape)
+		assert self.size() == other.size(), (self.shape(), other.shape())
 		best_rotation = 0
-		min_hd = hd = np.count_nonzero(self._template != other._template) / self.size
+		min_hd = hd = np.count_nonzero(self._template != other._template) / self.size()
 		hds = []
 		if rotations:
 			for rotation in range(-rotations, rotations+1):
 				other_rot = copy.deepcopy(other)
 				other_rot.shift(rotation)
-				hd = np.count_nonzero(self._template != other_rot._template) / self.size
+				hd = np.count_nonzero(self._template != other_rot._template) / self.size()
 				hds.append((rotation, hd))
 				if hd < min_hd:
 					min_hd = hd
@@ -158,12 +163,6 @@ class Template(object):
 		reference = np.repeat(initial_row, rows + 4, axis=0)
 		return cls(reference)
 
-def find_sequences_of(row):
-	is_value = np.concatenate(([0], np.equal(row, 1).view(np.int8), [0]))
-	diff = np.abs(np.diff(is_value))
-	ranges = np.where(diff == 1)[0].reshape(-1, 2)
-	return ranges
-
 reference_generation_hd = 0.4625
 temp_ic = Template.create(32, 512, 6.5, 0.25)
 temp_ic.shift(np.random.randint(10, 512 // 2))
@@ -174,26 +173,52 @@ exp_overlap = expected_overlap(target_hd)
 i_hd = (target_hd + exp_overlap) / 2
 b_hd = reference_generation_hd - i_hd
 
-# barcode flipping
-gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
-#print (gspace)
-hd = 0.0
-while not (math.isclose(hd, target_hd, abs_tol=0.025) or target_hd < hd):
-	temp_ic.majority_vote()
-	for i in range(temp_ic._template.shape[0]):
-		previous_b = int(temp_ic._template[i][0])
-		for j, b in enumerate(temp_ic._template[i][1:-1], start=1):
-			temp_ic.flip_edge(previous_b, b, gspace[i])
-			previous_b = b
+print ("T-HD:", target_hd)
+print ("I-HD:", i_hd)
+print ("B-HD:", b_hd)
 
-	test_ic = copy.deepcopy(temp_ic)
-	flip_indices = np.random.randint(low=0, high=temp_ic._template.size-1, size=temp_ic._template.size // 10)
-	test_ic._template.flat[flip_indices] ^= 1
-	test_ic._template = medfilt(test_ic._template).astype(np.int_)
+def to_file(iris_code: np.ndarray, path: Path) -> None:
+	'''Saves an iris-code to a text file.'''
+	path.parent.mkdir(exist_ok=True)
+	np.savetxt(str(path), iris_code, fmt="%u", delimiter="", newline=os.linesep)
+	
+def to_image(iris_code: np.ndarray, path: Path = None) -> None:
+	'''Saves an iris-code as an image.'''
+	iris_code = np.array(iris_code, dtype=np.uint8)
+	iris_code[iris_code == 0] = 255
+	iris_code[iris_code == 1] = 0
+	if path:
+		cv2.imwrite(str(path), iris_code)
+	else:
+		show(iris_code)
 
-	hd, _ = helpers.hamming_distance(temp_ic._template, test_ic._template[config.extra_rows_for_median_filter:-config.extra_rows_for_median_filter], 0)
-	print (hd)
+def show(image: np.ndarray) -> None:
+	cv2.imshow("image", image)
+	cv2.waitKey(0)
+	cv2.destroyAllWindows()
 
+def flip_barcode(temp_ic):
+	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
+	hd = 0.0
+	barcode = copy.deepcopy(temp_ic)
+	while not (math.isclose(hd, b_hd, abs_tol=0.025) or b_hd < hd):
+		temp_ic.majority_vote()
+		for i in range(temp_ic._template.shape[0]):
+			previous_b = int(temp_ic._template[i][0])
+			for j, b in enumerate(temp_ic._template[i][1:-1], start=1):
+				temp_ic.flip_edge(i, j, previous_b, b, gspace[i])
+				previous_b = b
+
+		test_ic = copy.deepcopy(temp_ic)
+		flip_indices = np.random.randint(low=0, high=temp_ic._template.size-1, size=temp_ic._template.size // 10)
+		test_ic._template.flat[flip_indices] ^= 1
+		test_ic._template = medfilt(test_ic._template).astype(np.int_)
+		test_ic.medfilt()
+		hd, _, _ = barcode.hamming_distance(test_ic, 0)
+	return test_ic
+
+temp_ic = flip_barcode(temp_ic)
+#to_image(temp_ic._template)
 reference, probe = copy.deepcopy(temp_ic), copy.deepcopy(temp_ic)
 
 # probe reference flipping
