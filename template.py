@@ -1,13 +1,47 @@
 import numpy as np
 from scipy.signal import medfilt
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Union, Tuple
+import itertools
 import cv2
+
+Number = Union[float, int]
 
 def sequence_length_generator(average_sequence_size_mu: int, average_sequence_size_sigma: int) -> Generator[int, None, None]:
 	'''Generates normally distributed length of iris-code sequences around a provided mean and sigma values.'''
 	while True:
 		yield int(np.rint(average_sequence_size_sigma * np.random.randn() + average_sequence_size_mu))
+
+def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_vertical: int, probabilitites: np.ndarray = None) -> None:
+	def get_corresponding_circle(span_horizontal: Number, span_vertical: Number) -> Tuple[Number, Number]:
+		radius = span_vertical / 2 + ((span_horizontal * 2) ** 2) / (8 * span_vertical)
+		x_center = 36 - span_vertical + radius
+		return radius, x_center
+
+	def in_circle(radius: Number, center_x: Number, center_y: Number, x: Number, y: Number) -> bool:
+		dist_squared = (center_x - x) ** 2 + (center_y - y) ** 2
+		return dist_squared <= radius ** 2
+
+	def around_middle(x_position: int, span_horizontal: int, x: int):
+		cutin_size = 0.05 * np.random.randn() + 0.20
+		return int(x_position - (cutin_size * span_horizontal)) < x < int(x_position + (cutin_size * span_horizontal))
+
+	def in_bounds(x: int, y: int):
+		return 0 <= x < 36 and 0 <= y < 512
+	dome_o = (*get_corresponding_circle(span_horizontal, span_vertical), x_position)
+	dome1_size = np.random.randint(4,6)
+	dome0_size = np.random.randint(2,4)
+	#print (dome1_size, dome0_size)
+	dome_i = (*get_corresponding_circle(span_horizontal-dome1_size, span_vertical-dome1_size), x_position)
+	dome_u = (*get_corresponding_circle(span_horizontal-dome1_size-dome0_size, span_vertical-dome1_size-dome0_size), x_position)
+	points2 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_o, *index)]
+	points1 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_o, *index) and not in_circle(*dome_i, *index) and not around_middle(x_position, span_horizontal, index[1])]
+	points0 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_i, *index) and not in_circle(*dome_u, *index) and not around_middle(x_position, span_horizontal, index[1])]
+	x, y = zip(*points1)
+	mask[x, y] = np.random.random(probabilitites[x, y].shape) < probabilitites[x, y] if probabilitites is not None else 1
+	x, y = zip(*points0)
+	mask[x, y] = 0 if np.random.rand() > 0.5 else 1
+	return points2, points1, points0
 
 
 class Template(object):
@@ -122,7 +156,7 @@ class Template(object):
 			hds.append(min_hd)
 		return min_hd, best_rotation, hds
 
-	def add_noise(self, arch_side=None, noise_hd=None):
+	def add_noise(self, noise_ic, arch_side=None, noise_hd=None):
 		mask = np.zeros((36, 512))
 		arch = np.zeros((36, 512))
 		#probabilitites = np.loadtxt("mask_probabilities.txt")
@@ -140,9 +174,9 @@ class Template(object):
 			min_x, max_x = indices[0].min(), indices[0].max()
 			min_y, max_y = indices[1].min(), indices[1].max()
 			x_l, y_l = max_x - min_x, max_y - min_y
-			x_start = np.random.randint(0, noise_ic.shape[0] // 2)
-			y_start = np.random.randint(0, noise_ic.shape[1] // 2)
-			random_noise = noise_ic[x_start:x_start+x_l+1, y_start:y_start+y_l+1]
+			x_start = np.random.randint(0, noise_ic._template.shape[0] // 2)
+			y_start = np.random.randint(0, noise_ic._template.shape[1] // 2)
+			random_noise = noise_ic._template[x_start:x_start+x_l+1, y_start:y_start+y_l+1]
 			arch = arch.astype(np.int_)
 			np.logical_or(random_noise, arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], out=arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], dtype=np.int_)
 			for p in np.ndindex(arch.shape):
@@ -157,7 +191,6 @@ class Template(object):
 			for p in dome_points:
 				mask[p[0]][p[1]] = 1
 		self._mask = np.logical_not(mask).astype(np.int_)
-		to_image(self._mask)
 		if noise_hd:
 			to_flip = []
 			for i in range(self._template.shape[0]):

@@ -14,11 +14,13 @@ from timeit import default_timer as timer
 from template import Template
 
 median_filter_rows = 2
-Number = Union[float, int]
 noise_ic = Template.from_image(Path("noise_ic.bmp"))
+
 with open("exp.json", "r") as f:
 	exp_overlaps = json.load(f)
 	exp_overlaps = {float(k):float(v) for k,v in exp_overlaps.items()}
+	
+
 
 class IrisCodeGenerator(object):
 	def __init__(self, to_produce, probes_per_subject):
@@ -53,39 +55,6 @@ def expected_overlap(target_hd):
 		elif target_hd_r > max(exp_overlaps.keys()):
 			exp_overlap = max(exp_overlaps.values())
 	return exp_overlap
-
-def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_vertical: int, probabilitites: np.ndarray = None) -> None:
-	def get_corresponding_circle(span_horizontal: Number, span_vertical: Number) -> Tuple[Number, Number]:
-		radius = span_vertical / 2 + ((span_horizontal * 2) ** 2) / (8 * span_vertical)
-		x_center = 36 - span_vertical + radius
-		return radius, x_center
-
-	def in_circle(radius: Number, center_x: Number, center_y: Number, x: Number, y: Number) -> bool:
-		dist_squared = (center_x - x) ** 2 + (center_y - y) ** 2
-		return dist_squared <= radius ** 2
-
-	def around_middle(x_position: int, span_horizontal: int, x: int):
-		cutin_size = 0.05 * np.random.randn() + 0.20
-		return int(x_position - (cutin_size * span_horizontal)) < x < int(x_position + (cutin_size * span_horizontal))
-
-	def in_bounds(x: int, y: int):
-		return 0 <= x < 36 and 0 <= y < 512
-	dome_o = (*get_corresponding_circle(span_horizontal, span_vertical), x_position)
-	dome1_size = np.random.randint(4,6)
-	dome0_size = np.random.randint(2,4)
-	#print (dome1_size, dome0_size)
-	dome_i = (*get_corresponding_circle(span_horizontal-dome1_size, span_vertical-dome1_size), x_position)
-	dome_u = (*get_corresponding_circle(span_horizontal-dome1_size-dome0_size, span_vertical-dome1_size-dome0_size), x_position)
-	points2 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_o, *index)]
-	points1 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_o, *index) and not in_circle(*dome_i, *index) and not around_middle(x_position, span_horizontal, index[1])]
-	points0 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_i, *index) and not in_circle(*dome_u, *index) and not around_middle(x_position, span_horizontal, index[1])]
-	x, y = zip(*points1)
-	mask[x, y] = np.random.random(probabilitites[x, y].shape) < probabilitites[x, y] if probabilitites is not None else 1
-	x, y = zip(*points0)
-	mask[x, y] = 0 if np.random.rand() > 0.5 else 1
-	return points2, points1, points0
-
-
 
 def flip_barcode(temp_ic, barcode_hd):
 	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
@@ -137,7 +106,6 @@ if __name__ == '__main__':
 
 	temp_ic = Template.create(32, 512, 6.5, 0.25)
 	temp_ic.to_image(Path("test.bmp"))
-	quit()
 	temp_ic.shift(np.random.randint(10, 512 // 2))
 	temp_ic.initial_zigzag()
 
@@ -162,7 +130,7 @@ if __name__ == '__main__':
 	arch_side = np.random.choice(("l", "r", None), p=(0.5, 0.5, 0.0))
 	print ("AS:", arch_side)
 	for ic in (temp_ic, reference, probe):
-		ic.add_noise(arch_side, noise_hd if noise_hd > 0 else None)
+		ic.add_noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
 		ic.remove_top_and_bottom_rows(median_filter_rows)
 		ic.expand(2)
 
