@@ -2,7 +2,7 @@ import numpy as np
 import itertools
 from typing import Generator, List
 import json
-from scipy.signal import medfilt
+from scipy.signal import medfilt2d
 import copy
 import math
 from pathlib import Path
@@ -16,8 +16,13 @@ median_filter_rows = 2
 reference_generation_hd = 0.4625
 noise_ic = Template.from_image(Path("noise_ic.bmp"))
 generated_directory = Path("generated")
-subjects = 4
-cpus = 4
+subjects = 1
+cpus = 1
+initial_rows, initial_columns = 32, 512
+target_rows, target_columns = 64, 512
+arch_side_probabilities = (0.5, 0.5, 0.0) # l, r, None
+barcode_max_shifts = 10
+barcode_mu, barcode_sigma = 6.5, 0.25
 
 with open("exp.json", "r") as f:
 	exp_overlaps = json.load(f)
@@ -37,13 +42,13 @@ class IrisCodeGenerator(object):
 	def __next__(self) -> np.ndarray:
 		'''Produces one iris-code.'''
 		while self._produced < self._to_produce:
-			temp_ic = Template.create(32, 512, 6.5, 0.25)
+			temp_ic = Template.create(initial_rows, initial_columns, barcode_mu, barcode_sigma)
 			temp_ic.to_image(Path("test.bmp"))
-			temp_ic.shift(np.random.randint(10, 512 // 2))
+			temp_ic.shift(np.random.randint(barcode_max_shifts, initial_columns // 2))
 			temp_ic.initial_zigzag()
 
 			seqs = temp_ic.find_sequences_of_all(1)
-			target_hd = float(weibull(3))
+			target_hd = 0.20#float(weibull(2))
 			exp_overlap = expected_overlap(target_hd)
 			i_hd = (target_hd + exp_overlap) / 2
 			b_hd = reference_generation_hd - i_hd
@@ -60,7 +65,7 @@ class IrisCodeGenerator(object):
 			print ("BR-HD:", temp_ic.hamming_distance(reference)[0])
 			print ("BP-HD:", temp_ic.hamming_distance(probe)[0])
 			print ("N-HD:", noise_hd)
-			arch_side = np.random.choice(("l", "r", None), p=(0.5, 0.5, 0.0))
+			arch_side = np.random.choice(("l", "r", None), p=arch_side_probabilities)
 			print ("AS:", arch_side)
 			for ic in (temp_ic, reference, probe):
 				ic.add_noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
@@ -71,9 +76,8 @@ class IrisCodeGenerator(object):
 			print ("S:", shift)
 			probe.shift(shift)
 
-			print (reference.hamming_distance(probe, rotations=8))
-			print (reference.hamming_distance(probe, rotations=8, mask=True))
-			print (probe._template.shape)
+			print ("NM-HD:", reference.hamming_distance(probe, rotations=8))
+			print ("M-HD:", reference.hamming_distance(probe, rotations=8, mask=True))
 			self._produced += 1
 			return reference, probe
 		else:
@@ -104,17 +108,13 @@ def flip_barcode(temp_ic, barcode_hd):
 	barcode = copy.deepcopy(temp_ic)
 	while not (math.isclose(hd, barcode_hd, abs_tol=0.025) or barcode_hd < hd):
 		temp_ic.majority_vote()
-		for i in range(temp_ic._template.shape[0]):
-			previous_b = int(temp_ic._template[i][0])
-			for j, b in enumerate(temp_ic._template[i][1:-1], start=1):
-				temp_ic.flip_edge(i, j, previous_b, b, gspace[i])
-				previous_b = b
+		for i, row in enumerate(temp_ic._template):
+			temp_ic.flip_edge(row, gspace[i])
 
 		test_ic = copy.deepcopy(temp_ic)
 		flip_indices = np.random.randint(low=0, high=temp_ic._template.size-1, size=temp_ic._template.size // 10)
 		test_ic._template.flat[flip_indices] ^= 1
-		test_ic._template = medfilt(test_ic._template).astype(np.int_)
-		test_ic.medfilt()
+		test_ic.medfilt2d()
 		hd, _, _ = barcode.hamming_distance(test_ic, 0, cut_rows=median_filter_rows)
 	return test_ic
 
@@ -122,25 +122,18 @@ def flip_templates(temp_ic, template_hd):
 	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
 	hd = 0.0
 	reference, probe = copy.deepcopy(temp_ic), copy.deepcopy(temp_ic)
-	z = 0
 	while not (math.isclose(hd, template_hd, abs_tol=0.005) or template_hd < hd):
-		reference.majority_vote()
-		probe.majority_vote()
-		for i in range(reference._template.shape[0]):
-			previous_b = int(reference._template[i][0])
-			for j, b in enumerate(reference._template[i][1:-1], start=1):
-				reference.flip_edge(i, j, previous_b, b, gspace[i])
-				previous_b = b
-		for i in range(probe._template.shape[0]):
-			previous_b = int(probe._template[i][0])
-			for j, b in enumerate(probe._template[i][1:-1], start=1):
-				probe.flip_edge(i, j, previous_b, b, gspace[i])
-				previous_b = b
+		for template in (reference, probe):
+			template.majority_vote()
+			template.majority_vote()
+			for i, row in enumerate(template._template):
+				template.flip_edge(row, gspace[i])
+			flip_indices = np.random.randint(low=0, high=template._template.size, size=template._template.size // 20)
+			template._template.flat[flip_indices] ^= 1
 		test_reference = copy.deepcopy(reference)
 		test_probe = copy.deepcopy(probe)
-		test_reference.medfilt()
-		test_probe.medfilt()
-		z+=1
+		test_reference.medfilt2d()
+		test_probe.medfilt2d()
 		hd, _, _ = test_reference.hamming_distance(test_probe, 0, cut_rows=median_filter_rows)
 	return test_reference, test_probe, hd
 	

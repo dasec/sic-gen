@@ -1,11 +1,21 @@
 import numpy as np
-from scipy.signal import medfilt
+from scipy.signal import medfilt2d
 from pathlib import Path
 from typing import Generator, Union, Tuple
 import itertools
 import cv2
 
 Number = Union[float, int]
+
+def ensure_bounds(index: int, change: int, iris_code_columns: int) -> int:
+	'''Makes sure that the sequence changes do not exceed row bounds.'''
+	if index + change >= iris_code_columns:
+		index = iris_code_columns-1
+	elif index + change < 0:
+		index = 0
+	else:
+		index += change
+	return index
 
 def sequence_length_generator(average_sequence_size_mu: int, average_sequence_size_sigma: int) -> Generator[int, None, None]:
 	'''Generates normally distributed length of iris-code sequences around a provided mean and sigma values.'''
@@ -43,31 +53,37 @@ def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_verti
 	mask[x, y] = 0 if np.random.rand() > 0.5 else 1
 	return points2, points1, points0
 
-
+import random
 class Template(object):
 	def __init__(self, template, mask=None):
 		self._template = template
 		self._mask = mask
 
-	def flip_edge(self, i, j, previous_bit, current_bit, flip_chance):
-		if previous_bit == 1 and current_bit == 0:
-			if np.random.rand() < flip_chance:
-				if np.random.rand() < 0.5:
-					self._template[i][j] = 1 # grow
-				else:
-					self._template[i][j-1] = 0 # shrink
-		elif previous_bit == 0 and current_bit == 1:
-			if np.random.rand() < flip_chance:
-				if np.random.rand() < 0.5:
-					self._template[i][j] = 0 # grow
-				else:
-					self._template[i][j-1] = 1 # shrink
+	def flip_edge(self, row, flip_chance):
+		seqs = list(map(tuple, self.find_sequences_of_row(row, 1)))
+		to_flip = random.sample(seqs, int(len(seqs) * flip_chance))
+		starts, ends = zip(*to_flip)
+		starts, ends = list(starts), list(ends)
+		random.shuffle(starts)
+		random.shuffle(ends)
+		ls, le = len(starts), len(ends)
+		sstart = [slice(0, ls // 2), slice(ls // 2 + 1, ls)]
+		send = [slice(0, le // 2), slice(le // 2 + 1, le)]
+		random.shuffle(sstart)
+		random.shuffle(send)
+		shrink_starts, grow_starts = [ensure_bounds(el, 0, 512) for el in starts[sstart[0]]], [ensure_bounds(el, -1, 512) for el in starts[sstart[1]]]
+		shrink_ends, grow_ends = [ensure_bounds(el, -1, 512) for el in ends[send[0]]], [ensure_bounds(el, 0, 512) for el in ends[send[0]]]
+		#print (list(map(len, [shrink_starts, grow_starts, shrink_ends, grow_ends])))
+		row[shrink_starts] = 0
+		row[grow_starts] = 1
+		row[shrink_ends] = 0
+		row[grow_ends] = 1
 
 	def find_sequences_of_all(self, value):
 		return [self.find_sequences_of_row(row, value) for row in self._template]
 
 	def find_sequences_of_row(self, row, value):
-		is_value = np.concatenate(([0], np.equal(row, value).view(np.int8), [0]))
+		is_value = np.concatenate(([0], np.equal(row, value).view(np.uint8), [0]))
 		diff = np.abs(np.diff(is_value))
 		ranges = np.where(diff == 1)[0].reshape(-1, 2)
 		return ranges
@@ -79,11 +95,13 @@ class Template(object):
 
 	def split(self, row, sequence_indices, split_threshold):
 		'''Splits long sequences. e.g. 11111111111 -> 11110001111.'''
-		for start_index, end_index in sequence_indices:
-			sequence_length = end_index - start_index
-			if sequence_length > split_threshold:
-				mid = int(np.rint((np.mean([start_index, end_index]))))
-				self.flip_range(row, mid-2, mid+3)
+		start, end = zip(*sequence_indices)
+		start, end = np.array(start), np.array(end)
+		lengths = end - start
+		indices = np.where(lengths > split_threshold)
+		for start_index, end_index in sequence_indices[indices]:
+			mid = int(np.rint((start_index + end_index) / 2))
+			self.flip_range(row, mid-2, mid+3)
 
 	def flip_range(self, row, start_index, end_index):
 		'''Flips the value of a range of indices in a row.'''
@@ -101,7 +119,7 @@ class Template(object):
 
 	def majority_vote(self, num_rows=3, split_threshold=14):
 		for i in range(0, self._template.shape[0], num_rows):
-			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.int_, copy=False)
+			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
 			seqs = self.find_sequences_of_row(majority, 1)
 			self.split(majority, seqs, split_threshold)
 			seqs = self.find_sequences_of_row(majority, 0)
@@ -116,8 +134,8 @@ class Template(object):
 		self._template = self._template[rows:-rows]
 		self._mask = self._mask[rows:-rows]
 		
-	def medfilt(self):
-		self._template = medfilt(self._template).astype(np.int_)
+	def medfilt2d(self):
+		self._template = medfilt2d(self._template).astype(np.uint8)
 
 	def hamming_distance(self, other, rotations=0, mask=False, cut_rows=None):
 		'''Fractional Hamming distance of two iris-codes.'''
@@ -177,7 +195,7 @@ class Template(object):
 			x_start = np.random.randint(0, noise_ic._template.shape[0] // 2)
 			y_start = np.random.randint(0, noise_ic._template.shape[1] // 2)
 			random_noise = noise_ic._template[x_start:x_start+x_l+1, y_start:y_start+y_l+1]
-			arch = arch.astype(np.int_)
+			arch = arch.astype(np.uint8)
 			np.logical_or(random_noise, arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], out=arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], dtype=np.int_)
 			for p in np.ndindex(arch.shape):
 				if p not in dome_points:
@@ -190,7 +208,7 @@ class Template(object):
 
 			for p in dome_points:
 				mask[p[0]][p[1]] = 1
-		self._mask = np.logical_not(mask).astype(np.int_)
+		self._mask = np.logical_not(mask).astype(np.uint8)
 		if noise_hd:
 			to_flip = []
 			for i in range(self._template.shape[0]):
@@ -239,7 +257,7 @@ class Template(object):
 			current ^= 1
 		initial_row = [np.concatenate(parts)[:columns]]
 		template = np.repeat(initial_row, rows + 2 * 2, axis=0)
-		return cls(template, None)
+		return cls(template.astype(np.uint8), None)
 
 	@classmethod
 	def from_image(cls, template_path: Path, mask_path: Path = None):
@@ -248,7 +266,7 @@ class Template(object):
 			template = cv2.imread(str(path), 0)
 			template[template == 0] = 1
 			template[template == 255] = 0
-			return template
+			return template.astype(np.uint8)
 		template = read_image(template_path)
 		mask = read_image(mask_path) if mask_path is not None else None
 		return cls(template, mask)
@@ -257,10 +275,10 @@ class Template(object):
 	def from_file(cls, template_path: Path, mask_path: Path = None):
 		'''Reads a template (and optionally its mask) from text file(s).'''
 		with open(template_path, 'r') as f:
-			template = np.array([list(row.strip()) for row in f.readlines()], dtype=np.int_)
+			template = np.array([list(row.strip()) for row in f.readlines()], dtype=np.uint8)
 		if mask_path is not None:
 			with open(mask_path, 'r') as f:
-				mask = np.array([list(row.strip()) for row in f.readlines()], dtype=np.int_)
+				mask = np.array([list(row.strip()) for row in f.readlines()], dtype=np.uint8)
 		else:
 			mask = None
 		return cls(template, mask)
