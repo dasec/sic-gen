@@ -66,10 +66,11 @@ class Template(object):
 
 	def expand(self, factor):
 		self._template = np.repeat(self._template, factor, axis=0)
-		self._mask = np.repeat(self._mask, factor, axis=0)
+		if self._mask is not None:
+			self._mask = np.repeat(self._mask, factor, axis=0)
 
 	def flip_edge(self, row, flip_chance):
-		seqs = list(map(tuple, self.find_sequences_of_row(row, 1)))
+		seqs = [el for el in list(map(tuple, self.find_sequences_of_row(row, 1))) if el[1] - el[0] > 1]
 		to_flip = random.sample(seqs, int(len(seqs) * flip_chance))
 		starts, ends = zip(*to_flip)
 		starts, ends = list(starts), list(ends)
@@ -97,6 +98,9 @@ class Template(object):
 	def flip_range(self, row, start_index, end_index):
 		'''Flips the value of a range of indices in a row.'''
 		row[start_index:end_index] ^= 1
+
+	def hamming_weight(self):
+		return np.count_nonzero(self._template)
 
 	def hamming_distance(self, other, rotations=0, masks=False, cut_rows=None):
 		'''Fractional Hamming distance of two iris-codes.'''
@@ -145,8 +149,10 @@ class Template(object):
 		for i in range(0, self._template.shape[0], num_rows):
 			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
 			seqs1 = self.find_sequences_of_row(majority, 1)
-			self.split(majority, seqs1, split_threshold)
 			seqs0 = self.sequences_of_0_from_sequences_of_1(seqs1)
+			#if np.random.rand() > 0.5:
+			self.split(majority, seqs1, split_threshold)
+			#else:
 			self.split(majority, seqs0, split_threshold)
 			self._template[i:i+num_rows] = majority
 
@@ -175,7 +181,7 @@ class Template(object):
 			y_start = np.random.randint(0, noise_ic._template.shape[1] // 2)
 			random_noise = noise_ic._template[x_start:x_start+x_l+1, y_start:y_start+y_l+1]
 			arch = arch.astype(np.uint8)
-			np.logical_or(random_noise, arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], out=arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], dtype=np.int_)
+			np.logical_or(random_noise, arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], out=arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], dtype=np.uint8)
 			for p in np.ndindex(arch.shape):
 				if p not in dome_points:
 					arch[p] = 0
@@ -183,7 +189,7 @@ class Template(object):
 			for p in np.ndindex(self._template.shape):
 				if p in dome_points:
 					self._template[p] = 0
-			np.logical_or(self._template, arch, out=self._template, dtype=np.int_)
+			np.logical_or(self._template, arch, out=self._template, dtype=np.uint8)
 
 			for p in dome_points:
 				mask[p[0]][p[1]] = 1
@@ -200,7 +206,8 @@ class Template(object):
 
 	def remove_top_and_bottom_rows(self, rows):
 		self._template = self._template[rows:-rows]
-		self._mask = self._mask[rows:-rows]
+		if self._mask is not None:
+			self._mask = self._mask[rows:-rows]
 
 	def select(self, every_n_row, every_n_column):
 		def remove_every_nth(array, n):

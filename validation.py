@@ -14,6 +14,12 @@ def degrees_of_freedom(mu: Number, sigma: Number) -> int:
 	'''Calculates the number of degrees of freedom in a distribution based on its mean and standard deviation.'''
 	return int(np.rint((mu * (1 - mu)) / (sigma * sigma)))
 
+def bit_counts(template):
+	hw = template.hamming_weight()
+	fraction1 = hw / template._template.size
+	fraction0 = 1.0 - fraction1
+	return (fraction0, fraction1)
+
 def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) -> None:
 	'''Produces a histogram and statistics about a collection of HD scores.'''
 	imp_comparisons = 0

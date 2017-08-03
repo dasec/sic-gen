@@ -17,7 +17,7 @@ median_filter_rows = 2
 reference_generation_hd = 0.4625
 noise_ic = Template.from_image(Path("noise_ic.bmp"))
 generated_directory = Path("generated")
-subjects = 100
+subjects = 16
 cpus = 4
 initial_rows, initial_columns = 32, 512
 target_rows, target_columns = 64, 512
@@ -57,8 +57,8 @@ class IrisCodeGenerator(object):
 			#print ("T-HD:", target_hd)
 			#print ("I-HD:", i_hd)
 			#print ("B-HD:", b_hd)
+			
 			temp_ic = flip_barcode(temp_ic, b_hd)
-
 			reference, probe, a_hd = flip_templates(temp_ic, target_hd)
 
 			noise_hd = target_hd - a_hd
@@ -72,7 +72,7 @@ class IrisCodeGenerator(object):
 				ic.noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
 				ic.remove_top_and_bottom_rows(median_filter_rows)
 				ic.expand(2)
-			temp_ic.to_image(Path("test.bmp"))
+
 			shift = int(np.rint(2 * np.random.randn() + 2))
 			#print ("S:", shift)
 			probe.shift(shift)
@@ -111,7 +111,7 @@ def flip_barcode(temp_ic, barcode_hd):
 		temp_ic.majority_vote()
 		for i, row in enumerate(temp_ic._template):
 			temp_ic.flip_edge(row, gspace[i])
-
+		#print (validation.bit_counts(temp_ic))
 		test_ic = copy.deepcopy(temp_ic)
 		flip_indices = np.random.randint(low=0, high=temp_ic._template.size-1, size=temp_ic._template.size // 10)
 		test_ic._template.flat[flip_indices] ^= 1
@@ -150,15 +150,17 @@ def produce(subdirectories: List[int]):
 
 def validate(processes: int) -> None:
 	'''Produces various statistics, which allow to determine whether or not the generated iris-codes have the desired statistical properties.'''
-	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"]
-	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"]
+	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"][:16]
+	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"][:16]
 	files = list(generated_directory.glob('**/*.txt'))
 	num_files = len(files)
 	num_cross_comparisons = num_files * (num_files - 1) // 2
 	#if num_cross_comparisons > config.validation_max_comparisons:
 	#	num_files = int(math.sqrt(config.validation_max_comparisons) * 2 + 1)
 	ic_sample = sorted({(path.parent, path.parent.stem, path.stem.split("_")[0]) for path in itertools.islice(files, num_files)})
-	ic_sample = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in ic_sample]
+	ic_sample = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in ic_sample][:16]
+	for t in ic_sample:
+		print (validation.bit_counts(t[2]))
 	#for template in ic_sample:
 	#	template[2].select(8, 2)
 	#logging.info("Sample of %d from the produced iris-codes selected for validation" % num_files)
@@ -173,8 +175,7 @@ if __name__ == '__main__':
 		num_pools = cpus if cpus <= cpu_count() else cpu_count
 	except NotImplementedError:
 		num_pools = 1
-	validate(cpus)
-	quit()
+
 	subdirectories = np.array_split(range(1, subjects+1), num_pools)
 	if num_pools > 1:
 		with Pool(num_pools) as p:
