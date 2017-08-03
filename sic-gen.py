@@ -48,7 +48,7 @@ class IrisCodeGenerator(object):
 			temp_ic.initial_zigzag()
 
 			seqs = temp_ic.find_sequences_of_all(1)
-			target_hd = 0.20#float(weibull(2))
+			target_hd = 0.2#float(weibull(2))
 			exp_overlap = expected_overlap(target_hd)
 			i_hd = (target_hd + exp_overlap) / 2
 			b_hd = reference_generation_hd - i_hd
@@ -68,10 +68,10 @@ class IrisCodeGenerator(object):
 			arch_side = np.random.choice(("l", "r", None), p=arch_side_probabilities)
 			print ("AS:", arch_side)
 			for ic in (temp_ic, reference, probe):
-				ic.add_noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
+				ic.noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
 				ic.remove_top_and_bottom_rows(median_filter_rows)
 				ic.expand(2)
-
+			temp_ic.to_image(Path("test.bmp"))
 			shift = int(np.rint(2 * np.random.randn() + 2))
 			print ("S:", shift)
 			probe.shift(shift)
@@ -103,7 +103,7 @@ def expected_overlap(target_hd):
 	return exp_overlap
 
 def flip_barcode(temp_ic, barcode_hd):
-	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
+	gspace = np.geomspace(0.2, 0.15, num=temp_ic._template.shape[0])
 	hd = 0.0
 	barcode = copy.deepcopy(temp_ic)
 	while not (math.isclose(hd, barcode_hd, abs_tol=0.025) or barcode_hd < hd):
@@ -116,10 +116,11 @@ def flip_barcode(temp_ic, barcode_hd):
 		test_ic._template.flat[flip_indices] ^= 1
 		test_ic.medfilt2d()
 		hd, _, _ = barcode.hamming_distance(test_ic, 0, cut_rows=median_filter_rows)
+	test_ic.medfilt2d()
 	return test_ic
 
 def flip_templates(temp_ic, template_hd):
-	gspace = np.geomspace(0.15, 0.05, num=temp_ic._template.shape[0])
+	gspace = np.geomspace(0.2, 0.15, num=temp_ic._template.shape[0])
 	hd = 0.0
 	reference, probe = copy.deepcopy(temp_ic), copy.deepcopy(temp_ic)
 	while not (math.isclose(hd, template_hd, abs_tol=0.005) or template_hd < hd):
@@ -128,7 +129,7 @@ def flip_templates(temp_ic, template_hd):
 			template.majority_vote()
 			for i, row in enumerate(template._template):
 				template.flip_edge(row, gspace[i])
-			flip_indices = np.random.randint(low=0, high=template._template.size, size=template._template.size // 20)
+			flip_indices = np.random.randint(low=0, high=template._template.size, size=template._template.size // 100)
 			template._template.flat[flip_indices] ^= 1
 		test_reference = copy.deepcopy(reference)
 		test_probe = copy.deepcopy(probe)

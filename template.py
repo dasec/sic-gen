@@ -59,6 +59,10 @@ class Template(object):
 		self._template = template
 		self._mask = mask
 
+	def expand(self, factor):
+		self._template = np.repeat(self._template, factor, axis=0)
+		self._mask = np.repeat(self._mask, factor, axis=0)
+
 	def flip_edge(self, row, flip_chance):
 		seqs = list(map(tuple, self.find_sequences_of_row(row, 1)))
 		to_flip = random.sample(seqs, int(len(seqs) * flip_chance))
@@ -74,10 +78,8 @@ class Template(object):
 		shrink_starts, grow_starts = [ensure_bounds(el, 0, 512) for el in starts[sstart[0]]], [ensure_bounds(el, -1, 512) for el in starts[sstart[1]]]
 		shrink_ends, grow_ends = [ensure_bounds(el, -1, 512) for el in ends[send[0]]], [ensure_bounds(el, 0, 512) for el in ends[send[0]]]
 		#print (list(map(len, [shrink_starts, grow_starts, shrink_ends, grow_ends])))
-		row[shrink_starts] = 0
-		row[grow_starts] = 1
-		row[shrink_ends] = 0
-		row[grow_ends] = 1
+		row[shrink_starts + shrink_ends] = 0
+		row[grow_starts + grow_ends] = 1
 
 	def find_sequences_of_all(self, value):
 		return [self.find_sequences_of_row(row, value) for row in self._template]
@@ -88,54 +90,9 @@ class Template(object):
 		ranges = np.where(diff == 1)[0].reshape(-1, 2)
 		return ranges
 
-	def shift(self, n):
-		self._template = np.roll(self._template, n, axis=1)
-		if self._mask is not None:
-			self._mask = np.roll(self._mask, n, axis=1)
-
-	def split(self, row, sequence_indices, split_threshold):
-		'''Splits long sequences. e.g. 11111111111 -> 11110001111.'''
-		start, end = zip(*sequence_indices)
-		start, end = np.array(start), np.array(end)
-		lengths = end - start
-		indices = np.where(lengths > split_threshold)
-		for start_index, end_index in sequence_indices[indices]:
-			mid = int(np.rint((start_index + end_index) / 2))
-			self.flip_range(row, mid-2, mid+3)
-
 	def flip_range(self, row, start_index, end_index):
 		'''Flips the value of a range of indices in a row.'''
 		row[start_index:end_index] ^= 1
-
-	def set_range(self, row, start_index, end_index, value):
-		'''Sets a range of indices in a row to the given value.'''
-		row[start_index:end_index] = value
-
-	def initial_zigzag(self):
-		prev = 0
-		for i in range(2, self._template.shape[0]-2, 2):
-			self._template[prev:i] = np.roll(self._template[prev:i], np.random.randint(-4,4))
-			prev = i
-
-	def majority_vote(self, num_rows=3, split_threshold=14):
-		for i in range(0, self._template.shape[0], num_rows):
-			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
-			seqs = self.find_sequences_of_row(majority, 1)
-			self.split(majority, seqs, split_threshold)
-			seqs = self.find_sequences_of_row(majority, 0)
-			self.split(majority, seqs, split_threshold)
-			self._template[i:i+num_rows] = majority
-
-	def expand(self, factor):
-		self._template = np.repeat(self._template, factor, axis=0)
-		self._mask = np.repeat(self._mask, factor, axis=0)
-
-	def remove_top_and_bottom_rows(self, rows):
-		self._template = self._template[rows:-rows]
-		self._mask = self._mask[rows:-rows]
-		
-	def medfilt2d(self):
-		self._template = medfilt2d(self._template).astype(np.uint8)
 
 	def hamming_distance(self, other, rotations=0, mask=False, cut_rows=None):
 		'''Fractional Hamming distance of two iris-codes.'''
@@ -174,7 +131,25 @@ class Template(object):
 			hds.append(min_hd)
 		return min_hd, best_rotation, hds
 
-	def add_noise(self, noise_ic, arch_side=None, noise_hd=None):
+	def initial_zigzag(self):
+		prev = 0
+		for i in range(2, self._template.shape[0]-2, 2):
+			self._template[prev:i] = np.roll(self._template[prev:i], np.random.randint(-4,4))
+			prev = i
+
+	def majority_vote(self, num_rows=3, split_threshold=14):
+		for i in range(0, self._template.shape[0], num_rows):
+			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
+			seqs1 = self.find_sequences_of_row(majority, 1)
+			self.split(majority, seqs1, split_threshold)
+			seqs0 = self.sequences_of_0_from_sequences_of_1(seqs1)
+			self.split(majority, seqs0, split_threshold)
+			self._template[i:i+num_rows] = majority
+
+	def medfilt2d(self):
+		self._template = medfilt2d(self._template).astype(np.uint8)
+
+	def noise(self, noise_ic, arch_side=None, noise_hd=None):
 		mask = np.zeros((36, 512))
 		arch = np.zeros((36, 512))
 		#probabilitites = np.loadtxt("mask_probabilities.txt")
@@ -212,11 +187,55 @@ class Template(object):
 		if noise_hd:
 			to_flip = []
 			for i in range(self._template.shape[0]):
-				seq0 = list(map(tuple, self.find_sequences_of_row(self._template[i], 0)))
-				seq1 = list(map(tuple, self.find_sequences_of_row(self._template[i], 1)))
+				seqs1 = self.find_sequences_of_row(self._template[i], 1)
+				seq1 = list(map(tuple, seqs1))
+				seq0 = list(map(tuple, self.sequences_of_0_from_sequences_of_1(seqs1)))
 				seqs = sum([(seq[0] + 1, seq[1] - 1) for seq in seq0 + seq1 if seq[1] - seq[0] > 2], ())
 				to_flip += [i*512 + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)]
 				self._template.flat[to_flip] ^= 1
+
+	def remove_top_and_bottom_rows(self, rows):
+		self._template = self._template[rows:-rows]
+		self._mask = self._mask[rows:-rows]
+
+	def sequences_of_0_from_sequences_of_1(self, sequences):
+		if sequences[0][0] == 0:
+			if sequences[-1][1] != 512:
+				result = np.append(np.ravel(sequences)[1:], 512).reshape(-1,2)
+			else:
+				result = np.ravel(sequences)[1:-1].reshape(-1,2)
+		else:
+			if sequences[-1][1] != 512:
+				result = np.concatenate(([0], np.ravel(sequences), [512])).reshape(-1,2)
+			else:
+				result = np.concatenate(([0], np.ravel(sequences)[:-1])).reshape(-1,2)
+		return result
+
+	def set_range(self, row, start_index, end_index, value):
+		'''Sets a range of indices in a row to the given value.'''
+		row[start_index:end_index] = value
+
+	def shift(self, n):
+		self._template = np.roll(self._template, n, axis=1)
+		if self._mask is not None:
+			self._mask = np.roll(self._mask, n, axis=1)
+
+	def split(self, row, sequence_indices, split_threshold):
+		'''Splits long sequences. e.g. 11111111111 -> 11110001111.'''
+		start, end = zip(*sequence_indices)
+		start, end = np.array(start), np.array(end)
+		lengths = end - start
+		indices = np.where(lengths > split_threshold)
+		for start_index, end_index in sequence_indices[indices]:
+			mid = int(np.rint((start_index + end_index) / 2))
+			self.flip_range(row, mid-2, mid+3)
+
+	def to_display(self) -> None:
+		for name, item in vars(self).items():
+			if item is not None:
+				cv2.imshow(name, item)
+				cv2.waitKey(0)
+				cv2.destroyAllWindows()
 
 	def to_file(self, path: Path) -> None:
 		'''Saves a template (and mask, if present) to text file(s).'''
@@ -237,13 +256,6 @@ class Template(object):
 				save_path = str(path.parent / Path(str(path.stem) + name + path.suffix))
 				cv2.imwrite(save_path, save_item)
 
-	def show(self) -> None:
-		for name, item in vars(self).items():
-			if item is not None:
-				cv2.imshow(name, item)
-				cv2.waitKey(0)
-				cv2.destroyAllWindows()
-
 	@classmethod
 	def create(cls, rows, columns, average_sequence_size_mu, average_sequence_size_sigma):
 		current = np.random.choice([0,1])
@@ -260,18 +272,6 @@ class Template(object):
 		return cls(template.astype(np.uint8), None)
 
 	@classmethod
-	def from_image(cls, template_path: Path, mask_path: Path = None):
-		'''Reads a template (and optionally its mask) from image(s).'''
-		def read_image(path):
-			template = cv2.imread(str(path), 0)
-			template[template == 0] = 1
-			template[template == 255] = 0
-			return template.astype(np.uint8)
-		template = read_image(template_path)
-		mask = read_image(mask_path) if mask_path is not None else None
-		return cls(template, mask)
-
-	@classmethod
 	def from_file(cls, template_path: Path, mask_path: Path = None):
 		'''Reads a template (and optionally its mask) from text file(s).'''
 		with open(template_path, 'r') as f:
@@ -281,4 +281,16 @@ class Template(object):
 				mask = np.array([list(row.strip()) for row in f.readlines()], dtype=np.uint8)
 		else:
 			mask = None
+		return cls(template, mask)
+
+	@classmethod
+	def from_image(cls, template_path: Path, mask_path: Path = None):
+		'''Reads a template (and optionally its mask) from image(s).'''
+		def read_image(path):
+			template = cv2.imread(str(path), 0)
+			template[template == 0] = 1
+			template[template == 255] = 0
+			return template.astype(np.uint8)
+		template = read_image(template_path)
+		mask = read_image(mask_path) if mask_path is not None else None
 		return cls(template, mask)
