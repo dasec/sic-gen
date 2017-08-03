@@ -11,13 +11,14 @@ import os
 from multiprocessing import Pool, cpu_count, set_start_method
 from timeit import default_timer as timer
 from template import Template
+import validation
 
 median_filter_rows = 2
 reference_generation_hd = 0.4625
 noise_ic = Template.from_image(Path("noise_ic.bmp"))
 generated_directory = Path("generated")
-subjects = 1
-cpus = 1
+subjects = 100
+cpus = 4
 initial_rows, initial_columns = 32, 512
 target_rows, target_columns = 64, 512
 arch_side_probabilities = (0.5, 0.5, 0.0) # l, r, None
@@ -48,36 +49,36 @@ class IrisCodeGenerator(object):
 			temp_ic.initial_zigzag()
 
 			seqs = temp_ic.find_sequences_of_all(1)
-			target_hd = 0.2#float(weibull(2))
+			target_hd = float(weibull(5))
 			exp_overlap = expected_overlap(target_hd)
 			i_hd = (target_hd + exp_overlap) / 2
 			b_hd = reference_generation_hd - i_hd
 
-			print ("T-HD:", target_hd)
-			print ("I-HD:", i_hd)
-			print ("B-HD:", b_hd)
+			#print ("T-HD:", target_hd)
+			#print ("I-HD:", i_hd)
+			#print ("B-HD:", b_hd)
 			temp_ic = flip_barcode(temp_ic, b_hd)
 
 			reference, probe, a_hd = flip_templates(temp_ic, target_hd)
 
 			noise_hd = target_hd - a_hd
-			print ("A-HD:", a_hd)
-			print ("BR-HD:", temp_ic.hamming_distance(reference)[0])
-			print ("BP-HD:", temp_ic.hamming_distance(probe)[0])
-			print ("N-HD:", noise_hd)
+			#print ("A-HD:", a_hd)
+			#print ("BR-HD:", temp_ic.hamming_distance(reference)[0])
+			#print ("BP-HD:", temp_ic.hamming_distance(probe)[0])
+			#print ("N-HD:", noise_hd)
 			arch_side = np.random.choice(("l", "r", None), p=arch_side_probabilities)
-			print ("AS:", arch_side)
+			#print ("AS:", arch_side)
 			for ic in (temp_ic, reference, probe):
 				ic.noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
 				ic.remove_top_and_bottom_rows(median_filter_rows)
 				ic.expand(2)
 			temp_ic.to_image(Path("test.bmp"))
 			shift = int(np.rint(2 * np.random.randn() + 2))
-			print ("S:", shift)
+			#print ("S:", shift)
 			probe.shift(shift)
 
-			print ("NM-HD:", reference.hamming_distance(probe, rotations=8))
-			print ("M-HD:", reference.hamming_distance(probe, rotations=8, mask=True))
+			#print ("NM-HD:", reference.hamming_distance(probe, rotations=8))
+			#print ("M-HD:", reference.hamming_distance(probe, rotations=8, masks=True))
 			self._produced += 1
 			return reference, probe
 		else:
@@ -144,6 +145,26 @@ def produce(subdirectories: List[int]):
 		save_dir = generated_directory / Path(str(subdirectories[subject_num]))
 		reference.to_image(save_dir / Path("1.bmp"))
 		probe.to_image(save_dir / Path("2.bmp"))
+		reference.to_file(save_dir / Path("1.txt"))
+		probe.to_file(save_dir / Path("2.txt"))
+
+def validate(processes: int) -> None:
+	'''Produces various statistics, which allow to determine whether or not the generated iris-codes have the desired statistical properties.'''
+	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"]
+	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"]
+	files = list(generated_directory.glob('**/*.txt'))
+	num_files = len(files)
+	num_cross_comparisons = num_files * (num_files - 1) // 2
+	#if num_cross_comparisons > config.validation_max_comparisons:
+	#	num_files = int(math.sqrt(config.validation_max_comparisons) * 2 + 1)
+	ic_sample = sorted({(path.parent, path.parent.stem, path.stem.split("_")[0]) for path in itertools.islice(files, num_files)})
+	ic_sample = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in ic_sample]
+	#for template in ic_sample:
+	#	template[2].select(8, 2)
+	#logging.info("Sample of %d from the produced iris-codes selected for validation" % num_files)
+	validation.sequence_lengths_validation(osiris_interval, osiris_biosecure, ic_sample)
+	#validation.hamming_distance_validation(ic_sample)
+	#logging.info("Iris-code validation complete")
 
 if __name__ == '__main__':
 	set_start_method("spawn")
@@ -152,14 +173,15 @@ if __name__ == '__main__':
 		num_pools = cpus if cpus <= cpu_count() else cpu_count
 	except NotImplementedError:
 		num_pools = 1
-
+	validate(cpus)
+	quit()
 	subdirectories = np.array_split(range(1, subjects+1), num_pools)
 	if num_pools > 1:
 		with Pool(num_pools) as p:
 			p.map(produce, subdirectories)
 	else:
 		produce(subdirectories[0])
-
+	validate(cpus)
 	stop = timer()
 	elapsed = stop - start
 	m, s = divmod(elapsed, 60)

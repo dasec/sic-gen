@@ -5,6 +5,7 @@ from typing import Generator, Union, Tuple
 import itertools
 import cv2
 import random
+import os
 
 Number = Union[float, int]
 
@@ -85,7 +86,7 @@ class Template(object):
 		row[grow_starts + grow_ends] = 1
 
 	def find_sequences_of_all(self, value):
-		return [self.find_sequences_of_row(row, value) for row in self._template]
+		return np.concatenate([self.find_sequences_of_row(row, value) for row in self._template])
 
 	def find_sequences_of_row(self, row, value):
 		is_value = np.concatenate(([0], np.equal(row, value).view(np.uint8), [0]))
@@ -97,7 +98,7 @@ class Template(object):
 		'''Flips the value of a range of indices in a row.'''
 		row[start_index:end_index] ^= 1
 
-	def hamming_distance(self, other, rotations=0, mask=False, cut_rows=None):
+	def hamming_distance(self, other, rotations=0, masks=False, cut_rows=None):
 		'''Fractional Hamming distance of two iris-codes.'''
 		def compute_hd(ic1, ic2, rotation, mask1=None, mask2=None):
 			ic2_r = np.array(ic2)
@@ -113,7 +114,7 @@ class Template(object):
 
 		assert self._template.size == other._template.size, (self._template.shape, other._template.shape)
 		ic1, ic2 = (np.array(self._template[cut_rows:-cut_rows]), np.array(other._template[cut_rows:-cut_rows])) if cut_rows else (np.array(self._template), np.array(other._template))
-		if mask:
+		if masks:
 			assert self._mask.size == other._mask.size, (self._mask.shape, other._mask.shape)
 			assert self._template.size == self._mask.size and other._template.size == other._mask.size, (self._template.shape, other._template.shape, self._mask.shape, other._mask.shape)
 			mask1, mask2 = (np.array(self._mask[cut_rows:-cut_rows]), np.array(other._mask[cut_rows:-cut_rows])) if cut_rows else (np.array(self._mask), np.array(other._mask))
@@ -200,6 +201,15 @@ class Template(object):
 	def remove_top_and_bottom_rows(self, rows):
 		self._template = self._template[rows:-rows]
 		self._mask = self._mask[rows:-rows]
+
+	def select(self, every_n_row, every_n_column):
+		def remove_every_nth(array, n):
+			return np.array([row for i, row in enumerate(array) if i % n == 0])
+		self._template = remove_every_nth(self._template, every_n_row)
+		self._template = remove_every_nth(self._template.T, every_n_column).T
+		if self._mask is not None:
+			self._mask = remove_every_nth(self._mask, every_n_row)
+			self._mask = remove_every_nth(self._mask.T, every_n_column).T
 
 	def sequences_of_0_from_sequences_of_1(self, sequences):
 		if sequences[0][0] == 0:
