@@ -4,18 +4,18 @@ from pathlib import Path
 from typing import Generator, Union, Tuple
 import itertools
 import cv2
+import random
 
 Number = Union[float, int]
 
 def ensure_bounds(index: int, change: int, iris_code_columns: int) -> int:
 	'''Makes sure that the sequence changes do not exceed row bounds.'''
-	if index + change >= iris_code_columns:
-		index = iris_code_columns-1
-	elif index + change < 0:
-		index = 0
-	else:
-		index += change
-	return index
+	new_index = index + change
+	if new_index >= iris_code_columns:
+		new_index = iris_code_columns-1
+	elif new_index < 0:
+		new_index = 0
+	return new_index
 
 def sequence_length_generator(average_sequence_size_mu: int, average_sequence_size_sigma: int) -> Generator[int, None, None]:
 	'''Generates normally distributed length of iris-code sequences around a provided mean and sigma values.'''
@@ -29,8 +29,10 @@ def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_verti
 		return radius, x_center
 
 	def in_circle(radius: Number, center_x: Number, center_y: Number, x: Number, y: Number) -> bool:
-		dist_squared = (center_x - x) ** 2 + (center_y - y) ** 2
-		return dist_squared <= radius ** 2
+		c_x = center_x - x
+		c_y = center_y - y
+		dist_squared = c_x * c_x + c_y * c_y
+		return dist_squared <= radius * radius
 
 	def around_middle(x_position: int, span_horizontal: int, x: int):
 		cutin_size = 0.05 * np.random.randn() + 0.20
@@ -41,19 +43,21 @@ def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_verti
 	dome_o = (*get_corresponding_circle(span_horizontal, span_vertical), x_position)
 	dome1_size = np.random.randint(4,6)
 	dome0_size = np.random.randint(2,4)
-	#print (dome1_size, dome0_size)
 	dome_i = (*get_corresponding_circle(span_horizontal-dome1_size, span_vertical-dome1_size), x_position)
 	dome_u = (*get_corresponding_circle(span_horizontal-dome1_size-dome0_size, span_vertical-dome1_size-dome0_size), x_position)
-	points2 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_o, *index)]
-	points1 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_o, *index) and not in_circle(*dome_i, *index) and not around_middle(x_position, span_horizontal, index[1])]
-	points0 = [index for index in itertools.product(range(36), range(512)) if in_circle(*dome_i, *index) and not in_circle(*dome_u, *index) and not around_middle(x_position, span_horizontal, index[1])]
+	all_points = list(itertools.product(range(36), range(512)))
+	circle_i = {index for index in all_points if in_circle(*dome_i, *index)}
+	circle_o = {index for index in all_points if in_circle(*dome_o, *index)}
+	circle_u = {index for index in all_points if in_circle(*dome_u, *index)}
+	points2 = [index for index in all_points if index in circle_o]
+	points1 = [index for index in all_points if index in circle_o and index not in circle_i and not around_middle(x_position, span_horizontal, index[1])]
+	points0 = [index for index in all_points if index in circle_i and index not in circle_u and not around_middle(x_position, span_horizontal, index[1])]
 	x, y = zip(*points1)
 	mask[x, y] = np.random.random(probabilitites[x, y].shape) < probabilitites[x, y] if probabilitites is not None else 1
 	x, y = zip(*points0)
 	mask[x, y] = 0 if np.random.rand() > 0.5 else 1
-	return points2, points1, points0
+	return points2
 
-import random
 class Template(object):
 	def __init__(self, template, mask=None):
 		self._template = template
@@ -77,7 +81,6 @@ class Template(object):
 		random.shuffle(send)
 		shrink_starts, grow_starts = [ensure_bounds(el, 0, 512) for el in starts[sstart[0]]], [ensure_bounds(el, -1, 512) for el in starts[sstart[1]]]
 		shrink_ends, grow_ends = [ensure_bounds(el, -1, 512) for el in ends[send[0]]], [ensure_bounds(el, 0, 512) for el in ends[send[0]]]
-		#print (list(map(len, [shrink_starts, grow_starts, shrink_ends, grow_ends])))
 		row[shrink_starts + shrink_ends] = 0
 		row[grow_starts + grow_ends] = 1
 
@@ -157,9 +160,9 @@ class Template(object):
 		
 		if arch_side:
 			if arch_side == "l":
-				p2, p1, p0 = add_dome(arch, np.random.randint(50, 150), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
+				p2 = add_dome(arch, np.random.randint(50, 150), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
 			else: # r
-				p2, p1, p0 = add_dome(arch, np.random.randint(512-150, 512-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
+				p2 = add_dome(arch, np.random.randint(512-150, 512-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
 			
 			dome_points = set(p2)
 
