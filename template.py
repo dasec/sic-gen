@@ -211,7 +211,7 @@ class Template(object):
 			if sequences[-1][1] != 512:
 				result = np.concatenate(([0], np.ravel(sequences), [512])).reshape(-1,2)
 			else:
-				result = np.concatenate(([0], np.ravel(sequences)[:-1])).reshape(-1,2)
+				result = np.concatenate(([0], np.ravel(sequences), [512])).reshape(-1,2)
 		return result
 
 	def set_range(self, row, start_index, end_index, value):
