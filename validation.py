@@ -1,20 +1,19 @@
-import numpy as np
-from typing import Union, Tuple, List
-from pathlib import Path
-from matplotlib import pyplot as plt
 import matplotlib.mlab as mlab
+from matplotlib import pyplot as plt
+import numpy as np
+from pathlib import Path
+from typing import Tuple, List
 
-Number = Union[float, int]
-
-def distribution_statistics(values: List[Number]) -> Tuple[Number, Number, Number, Number, Number]:
+def distribution_statistics(values: List[float]) -> Tuple[float, float, float, float, float]:
 	'''Produces some basic descriptive statistics for a distribution.'''
 	return len(values), min(values), max(values), np.mean(values), np.std(values)
 
-def degrees_of_freedom(mu: Number, sigma: Number) -> int:
+def degrees_of_freedom(mu: float, sigma: float) -> int:
 	'''Calculates the number of degrees of freedom in a distribution based on its mean and standard deviation.'''
 	return int(np.rint((mu * (1 - mu)) / (sigma * sigma)))
 
-def bit_counts(template):
+def bit_counts(template) -> Tuple[float, float]:
+	'''Computes fractions of 0's and 0's in a template.'''
 	hw = template.hamming_weight()
 	fraction1 = hw / template._template.size
 	fraction0 = 1.0 - fraction1

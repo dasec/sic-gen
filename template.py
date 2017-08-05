@@ -1,13 +1,10 @@
-import numpy as np
-from scipy.signal import medfilt2d
-from pathlib import Path
-from typing import Generator, Union, Tuple
-import itertools
 import cv2
+import itertools
+import numpy as np
+from pathlib import Path
 import random
-import os
-
-Number = Union[float, int]
+from scipy.signal import medfilt2d
+from typing import Generator, List, Tuple
 
 def ensure_bounds(index: int, change: int, iris_code_columns: int) -> int:
 	'''Makes sure that the sequence changes do not exceed row bounds.'''
@@ -18,29 +15,34 @@ def ensure_bounds(index: int, change: int, iris_code_columns: int) -> int:
 		new_index = 0
 	return new_index
 
-def sequence_length_generator(average_sequence_size_mu: int, average_sequence_size_sigma: int) -> Generator[int, None, None]:
+def sequence_length_generator(average_sequence_size_mu: float, average_sequence_size_sigma: float) -> Generator[int, None, None]:
 	'''Generates normally distributed length of iris-code sequences around a provided mean and sigma values.'''
 	while True:
 		yield int(np.rint(average_sequence_size_sigma * np.random.randn() + average_sequence_size_mu))
 
-def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_vertical: int, probabilitites: np.ndarray = None) -> None:
-	def get_corresponding_circle(span_horizontal: Number, span_vertical: Number) -> Tuple[Number, Number]:
+def create_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_vertical: int, probabilitites: np.ndarray = None) -> None:
+	def get_corresponding_circle(span_horizontal: float, span_vertical: float) -> Tuple[float, float]:
+		'''Computes a circle corresponding to given spans.'''
 		radius = span_vertical / 2 + ((span_horizontal * 2) ** 2) / (8 * span_vertical)
 		x_center = 36 - span_vertical + radius
 		return radius, x_center
 
-	def in_circle(radius: Number, center_x: Number, center_y: Number, x: Number, y: Number) -> bool:
+	def in_circle(radius: float, center_x: float, center_y: float, x: float, y: float) -> bool:
+		'''Checks if a point is within a circle.'''
 		c_x = center_x - x
 		c_y = center_y - y
 		dist_squared = c_x * c_x + c_y * c_y
 		return dist_squared <= radius * radius
 
-	def around_middle(x_position: int, span_horizontal: int, x: int):
+	def around_middle(x_position: int, span_horizontal: int, x: int) -> bool:
+		'''Checks if point is around middle of the arch.'''
 		cutin_size = 0.05 * np.random.randn() + 0.20
 		return int(x_position - (cutin_size * span_horizontal)) < x < int(x_position + (cutin_size * span_horizontal))
 
-	def in_bounds(x: int, y: int):
+	def in_bounds(x: int, y: int) -> bool:
+		'''Checks if a point is within template size bounds.'''
 		return 0 <= x < 36 and 0 <= y < 512
+
 	dome_o = (*get_corresponding_circle(span_horizontal, span_vertical), x_position)
 	dome1_size = np.random.randint(4,6)
 	dome0_size = np.random.randint(2,4)
@@ -60,16 +62,18 @@ def add_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_verti
 	return points2
 
 class Template(object):
-	def __init__(self, template, mask=None):
+	def __init__(self, template: np.ndarray, mask: np.ndarray = None):
 		self._template = template
 		self._mask = mask
 
-	def expand(self, factor):
+	def expand(self, factor: int) -> None:
+		'''Expand the template by duplicating rows.'''
 		self._template = np.repeat(self._template, factor, axis=0)
 		if self._mask is not None:
 			self._mask = np.repeat(self._mask, factor, axis=0)
 
-	def flip_edge(self, row, flip_chance):
+	def flip_edge(self, row: np.ndarray, flip_chance: float) -> None:
+		'''Randomly flips bits at sequence edges of a row.'''
 		seqs = [el for el in list(map(tuple, self.find_sequences_of_row(row, 1))) if el[1] - el[0] > 1]
 		to_flip = random.sample(seqs, int(len(seqs) * flip_chance))
 		starts, ends = zip(*to_flip)
@@ -86,25 +90,28 @@ class Template(object):
 		row[shrink_starts + shrink_ends] = 0
 		row[grow_starts + grow_ends] = 1
 
-	def find_sequences_of_all(self, value):
+	def find_sequences_of_all(self, value: int) -> np.ndarray:
+		'''Finds consecutive sequences of given value for all rows in a template.'''
 		return np.concatenate([self.find_sequences_of_row(row, value) for row in self._template])
 
-	def find_sequences_of_row(self, row, value):
+	def find_sequences_of_row(self, row: np.ndarray, value: int) -> np.ndarray:
+		'''Finds consecutive sequence of given value for a single template row.'''
 		is_value = np.concatenate(([0], np.equal(row, value).view(np.uint8), [0]))
 		diff = np.abs(np.diff(is_value))
 		ranges = np.where(diff == 1)[0].reshape(-1, 2)
 		return ranges
 
-	def flip_range(self, row, start_index, end_index):
+	def flip_range(self, row: np.ndarray, start_index: int, end_index: int) -> None:
 		'''Flips the value of a range of indices in a row.'''
 		row[start_index:end_index] ^= 1
 
-	def hamming_weight(self):
+	def hamming_weight(self) -> int:
+		'''The Hamming weight of a template (number of 1's).'''
 		return np.count_nonzero(self._template)
 
-	def hamming_distance(self, other, rotations=0, masks=False, cut_rows=None):
+	def hamming_distance(self, other, rotations: int = 0, masks: bool = False, cut_rows: int = None) -> Tuple[float, int, List[float]]:
 		'''Fractional Hamming distance of two iris-codes.'''
-		def compute_hd(ic1, ic2, rotation, mask1=None, mask2=None):
+		def compute_hd(ic1: np.ndarray, ic2: np.ndarray, rotation: int, mask1: np.ndarray = None, mask2: np.ndarray = None) -> float:
 			ic2_r = np.array(ic2)
 			ic2_r = np.roll(ic2_r, rotation, axis=1)
 			if all(m is not None for m in (mask1, mask2)):
@@ -139,13 +146,15 @@ class Template(object):
 			hds.append(min_hd)
 		return min_hd, best_rotation, hds
 
-	def initial_zigzag(self):
+	def initial_zigzag(self) -> None:
+		'''Randomly shifts rows of a template.'''
 		prev = 0
 		for i in range(2, self._template.shape[0]-2, 2):
 			self._template[prev:i] = np.roll(self._template[prev:i], np.random.randint(-4,4))
 			prev = i
 
-	def majority_vote(self, num_rows=3, split_threshold=14):
+	def majority_vote(self, num_rows: int = 3, split_threshold: int = 14) -> None:
+		'''Performs majority voting on a template and splits too long consecutive sequences.'''
 		for i in range(0, self._template.shape[0], num_rows):
 			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
 			seqs1 = self.find_sequences_of_row(majority, 1)
@@ -156,10 +165,12 @@ class Template(object):
 			self.split(majority, seqs0, split_threshold)
 			self._template[i:i+num_rows] = majority
 
-	def medfilt2d(self):
+	def medfilt2d(self) -> None:
+		'''Performs a 3x3 median filtering of a template.'''
 		self._template = medfilt2d(self._template).astype(np.uint8)
 
-	def noise(self, noise_ic, arch_side=None, noise_hd=None):
+	def noise(self, noise_ic: np.ndarray, arch_side: str = None, noise_hd: float = None) -> None:
+		'''Adds noise (eyelid arch, pupil row, random) to a template.'''
 		mask = np.zeros((36, 512))
 		arch = np.zeros((36, 512))
 		#probabilitites = np.loadtxt("mask_probabilities.txt")
@@ -167,9 +178,9 @@ class Template(object):
 		
 		if arch_side:
 			if arch_side == "l":
-				p2 = add_dome(arch, np.random.randint(50, 150), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
+				p2 = create_dome(arch, np.random.randint(50, 150), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
 			else: # r
-				p2 = add_dome(arch, np.random.randint(512-150, 512-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
+				p2 = create_dome(arch, np.random.randint(512-150, 512-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
 			
 			dome_points = set(p2)
 
@@ -204,12 +215,14 @@ class Template(object):
 				to_flip += [i*512 + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)]
 				self._template.flat[to_flip] ^= 1
 
-	def remove_top_and_bottom_rows(self, rows):
-		self._template = self._template[rows:-rows]
+	def remove_top_and_bottom_rows(self, n: int) -> None:
+		'''Removes the top and bottom n rows of a template.'''
+		self._template = self._template[n:-n]
 		if self._mask is not None:
-			self._mask = self._mask[rows:-rows]
+			self._mask = self._mask[n:-n]
 
-	def select(self, every_n_row, every_n_column):
+	def select(self, every_n_row: int, every_n_column: int) -> None:
+		'''Reduces template dimensions by selecting every nth row and/or column.'''
 		def remove_every_nth(array, n):
 			return np.array([row for i, row in enumerate(array) if i % n == 0])
 		self._template = remove_every_nth(self._template, every_n_row)
@@ -218,7 +231,8 @@ class Template(object):
 			self._mask = remove_every_nth(self._mask, every_n_row)
 			self._mask = remove_every_nth(self._mask.T, every_n_column).T
 
-	def sequences_of_0_from_sequences_of_1(self, sequences):
+	def sequences_of_0_from_sequences_of_1(self, sequences: np.ndarray) -> np.ndarray:
+		'''Given a list of sequences of 1's, computes sequences of 0's.'''
 		if sequences[0][0] == 0:
 			if sequences[-1][1] != 512:
 				result = np.append(np.ravel(sequences)[1:], 512).reshape(-1,2)
@@ -231,7 +245,7 @@ class Template(object):
 				result = np.concatenate(([0], np.ravel(sequences), [512])).reshape(-1,2)
 		return result
 
-	def set_range(self, row, start_index, end_index, value):
+	def set_range(self, row: np.ndarray, start_index: int, end_index: int, value: int) -> None:
 		'''Sets a range of indices in a row to the given value.'''
 		row[start_index:end_index] = value
 
@@ -240,7 +254,7 @@ class Template(object):
 		if self._mask is not None:
 			self._mask = np.roll(self._mask, n, axis=1)
 
-	def split(self, row, sequence_indices, split_threshold):
+	def split(self, row: np.ndarray, sequence_indices: np.ndarray, split_threshold: int) -> None:
 		'''Splits long sequences. e.g. 11111111111 -> 11110001111.'''
 		start, end = zip(*sequence_indices)
 		start, end = np.array(start), np.array(end)
@@ -251,6 +265,7 @@ class Template(object):
 			self.flip_range(row, mid-2, mid+3)
 
 	def to_display(self) -> None:
+		'''Displays a template (and mask, if present).'''
 		for name, item in vars(self).items():
 			if item is not None:
 				cv2.imshow(name, item)
@@ -277,7 +292,7 @@ class Template(object):
 				cv2.imwrite(save_path, save_item)
 
 	@classmethod
-	def create(cls, rows, columns, average_sequence_size_mu, average_sequence_size_sigma):
+	def create(cls, rows: int, columns: int, average_sequence_size_mu: float, average_sequence_size_sigma: float):
 		current = np.random.choice([0,1])
 		parts = []
 		i = 0

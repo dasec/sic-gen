@@ -1,24 +1,23 @@
-import numpy as np
-import itertools
-from typing import Generator, List
-import json
-from scipy.signal import medfilt2d
 import copy
-import math
-from pathlib import Path
 import cv2
-import os
+import itertools
+import json
+import math
 from multiprocessing import Pool, cpu_count, set_start_method
-from timeit import default_timer as timer
+import numpy as np
+import os
+from pathlib import Path
 from template import Template
+from timeit import default_timer as timer
+from typing import Generator, List
 import validation
 
 median_filter_rows = 2
 reference_generation_hd = 0.4625
 noise_ic = Template.from_image(Path("noise_ic.bmp"))
 generated_directory = Path("generated")
-subjects = 16
-cpus = 4
+subjects = 1
+cpus = 1
 initial_rows, initial_columns = 32, 512
 target_rows, target_columns = 64, 512
 arch_side_probabilities = (0.5, 0.5, 0.0) # l, r, None
@@ -30,18 +29,17 @@ with open("exp.json", "r") as f:
 	exp_overlaps = {float(k):float(v) for k,v in exp_overlaps.items()}
 
 class IrisCodeGenerator(object):
-	def __init__(self, to_produce, probes_per_subject):
+	def __init__(self, to_produce: int):
 		if not isinstance(to_produce, int) or to_produce < 0:
 			raise ValueError("Number of generated iris codes must be a positive integer, instead got:", to_produce)
 		self._to_produce = to_produce
-		self._probes_per_subject = probes_per_subject
 
 	def __iter__(self):
 		self._produced = 0
 		return self
 
-	def __next__(self) -> np.ndarray:
-		'''Produces one iris-code.'''
+	def __next__(self) -> Tuple[Template, Template]:
+		'''Produces synthetic iris-code templates.'''
 		while self._produced < self._to_produce:
 			temp_ic = Template.create(initial_rows, initial_columns, barcode_mu, barcode_sigma)
 			temp_ic.to_image(Path("test.bmp"))
@@ -84,7 +82,8 @@ class IrisCodeGenerator(object):
 		else:
 			raise StopIteration
 
-def weibull(shape, m=0.0001, t_min=0.015, t_max=0.25):
+def weibull(shape: float, m:float = 0.0001, t_min: float = 0.015, t_max: float = 0.25) -> float:
+	'''Returns random values from a normalised Weibull distribution.'''
 	normalise = lambda o_min, o_max, t_min, t_max, value: ((t_max - t_min) / (o_max - o_min)) * (value - o_max) + t_max
 	X = lambda shape, U: 1.0 * (-np.log2(U)) ** (1 / shape)
 	v = X(shape, np.random.rand())
@@ -92,7 +91,8 @@ def weibull(shape, m=0.0001, t_min=0.015, t_max=0.25):
 	o_max = X(shape, m)
 	return normalise(o_min, o_max, t_max, t_min, v)
 
-def expected_overlap(target_hd):
+def expected_overlap(target_hd: float) -> float:
+	'''Looks up expected overlap of bit-flips between two templates.'''
 	target_hd_r = round(target_hd, 3)
 	try:
 		exp_overlap = exp_overlaps[target_hd_r]
@@ -103,7 +103,8 @@ def expected_overlap(target_hd):
 			exp_overlap = max(exp_overlaps.values())
 	return exp_overlap
 
-def flip_barcode(temp_ic, barcode_hd):
+def flip_barcode(temp_ic: Template, barcode_hd: float) -> Template:
+	'''Flips bits in the initial barcode template until an intermediate HD is reached.'''
 	gspace = np.geomspace(0.2, 0.15, num=temp_ic._template.shape[0])
 	hd = 0.0
 	barcode = copy.deepcopy(temp_ic)
@@ -120,7 +121,8 @@ def flip_barcode(temp_ic, barcode_hd):
 	test_ic.medfilt2d()
 	return test_ic
 
-def flip_templates(temp_ic, template_hd):
+def flip_templates(temp_ic: Template, template_hd: float) -> Tuple[Template, Template, float]:
+	'''Takes an intermediate template and produces a reference and probe with a desired HD.'''
 	gspace = np.geomspace(0.2, 0.15, num=temp_ic._template.shape[0])
 	hd = 0.0
 	reference, probe = copy.deepcopy(temp_ic), copy.deepcopy(temp_ic)
@@ -139,7 +141,7 @@ def flip_templates(temp_ic, template_hd):
 		hd, _, _ = test_reference.hamming_distance(test_probe, 0, cut_rows=median_filter_rows)
 	return test_reference, test_probe, hd
 	
-def produce(subdirectories: List[int]):
+def produce(subdirectories: List[int]) -> None:
 	'''Produce iris-codes segragated into subdirectories.'''
 	for subject_num, (reference, probe) in enumerate(IrisCodeGenerator(len(subdirectories), 0)):
 		save_dir = generated_directory / Path(str(subdirectories[subject_num]))
@@ -150,15 +152,15 @@ def produce(subdirectories: List[int]):
 
 def validate(processes: int) -> None:
 	'''Produces various statistics, which allow to determine whether or not the generated iris-codes have the desired statistical properties.'''
-	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"][:16]
-	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"][:16]
+	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"]
+	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"]
 	files = list(generated_directory.glob('**/*.txt'))
 	num_files = len(files)
 	num_cross_comparisons = num_files * (num_files - 1) // 2
 	#if num_cross_comparisons > config.validation_max_comparisons:
 	#	num_files = int(math.sqrt(config.validation_max_comparisons) * 2 + 1)
 	ic_sample = sorted({(path.parent, path.parent.stem, path.stem.split("_")[0]) for path in itertools.islice(files, num_files)})
-	ic_sample = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in ic_sample][:16]
+	ic_sample = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in ic_sample]
 	for t in ic_sample:
 		print (validation.bit_counts(t[2]))
 	#for template in ic_sample:
@@ -182,7 +184,7 @@ if __name__ == '__main__':
 			p.map(produce, subdirectories)
 	else:
 		produce(subdirectories[0])
-	validate(cpus)
+	#validate(cpus)
 	stop = timer()
 	elapsed = stop - start
 	m, s = divmod(elapsed, 60)
