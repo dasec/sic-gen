@@ -1,6 +1,7 @@
 import cv2
 import itertools
 import numpy as np
+import os
 from pathlib import Path
 import random
 from scipy.signal import medfilt2d
@@ -24,7 +25,7 @@ def create_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_ve
 	def get_corresponding_circle(span_horizontal: float, span_vertical: float) -> Tuple[float, float]:
 		'''Computes a circle corresponding to given spans.'''
 		radius = span_vertical / 2 + ((span_horizontal * 2) ** 2) / (8 * span_vertical)
-		x_center = 36 - span_vertical + radius
+		x_center = mask.shape[0] - span_vertical + radius
 		return radius, x_center
 
 	def in_circle(radius: float, center_x: float, center_y: float, x: float, y: float) -> bool:
@@ -41,14 +42,14 @@ def create_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_ve
 
 	def in_bounds(x: int, y: int) -> bool:
 		'''Checks if a point is within template size bounds.'''
-		return 0 <= x < 36 and 0 <= y < 512
+		return 0 <= x < mask.shape[0] and 0 <= y < mask.shape[1]
 
 	dome_o = (*get_corresponding_circle(span_horizontal, span_vertical), x_position)
 	dome1_size = np.random.randint(4,6)
 	dome0_size = np.random.randint(2,4)
 	dome_i = (*get_corresponding_circle(span_horizontal-dome1_size, span_vertical-dome1_size), x_position)
 	dome_u = (*get_corresponding_circle(span_horizontal-dome1_size-dome0_size, span_vertical-dome1_size-dome0_size), x_position)
-	all_points = list(itertools.product(range(36), range(512)))
+	all_points = list(itertools.product(range(mask.shape[0]), range(mask.shape[1])))
 	circle_i = {index for index in all_points if in_circle(*dome_i, *index)}
 	circle_o = {index for index in all_points if in_circle(*dome_o, *index)}
 	circle_u = {index for index in all_points if in_circle(*dome_u, *index)}
@@ -85,8 +86,8 @@ class Template(object):
 		send = [slice(0, le // 2), slice(le // 2 + 1, le)]
 		random.shuffle(sstart)
 		random.shuffle(send)
-		shrink_starts, grow_starts = [ensure_bounds(el, 0, 512) for el in starts[sstart[0]]], [ensure_bounds(el, -1, 512) for el in starts[sstart[1]]]
-		shrink_ends, grow_ends = [ensure_bounds(el, -1, 512) for el in ends[send[0]]], [ensure_bounds(el, 0, 512) for el in ends[send[0]]]
+		shrink_starts, grow_starts = [ensure_bounds(el, 0, row.shape[0]) for el in starts[sstart[0]]], [ensure_bounds(el, -1, row.shape[0]) for el in starts[sstart[1]]]
+		shrink_ends, grow_ends = [ensure_bounds(el, -1, row.shape[0]) for el in ends[send[0]]], [ensure_bounds(el, 0, row.shape[0]) for el in ends[send[0]]]
 		row[shrink_starts + shrink_ends] = 0
 		row[grow_starts + grow_ends] = 1
 
@@ -171,8 +172,8 @@ class Template(object):
 
 	def noise(self, noise_ic: np.ndarray, arch_side: str = None, noise_hd: float = None) -> None:
 		'''Adds noise (eyelid arch, pupil row, random) to a template.'''
-		mask = np.zeros((36, 512))
-		arch = np.zeros((36, 512))
+		mask = np.zeros(self._template.shape)
+		arch = np.zeros(self._template.shape)
 		#probabilitites = np.loadtxt("mask_probabilities.txt")
 		#mask2 = (np.random.random(probabilitites.shape) < probabilitites)
 		
@@ -180,7 +181,7 @@ class Template(object):
 			if arch_side == "l":
 				p2 = create_dome(arch, np.random.randint(50, 150), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
 			else: # r
-				p2 = create_dome(arch, np.random.randint(512-150, 512-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
+				p2 = create_dome(arch, np.random.randint(mask.shape[0]-150, mask.shape[0]-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
 			
 			dome_points = set(p2)
 
@@ -212,7 +213,7 @@ class Template(object):
 				seq1 = list(map(tuple, seqs1))
 				seq0 = list(map(tuple, self.sequences_of_0_from_sequences_of_1(seqs1)))
 				seqs = sum([(seq[0] + 1, seq[1] - 1) for seq in seq0 + seq1 if seq[1] - seq[0] > 2], ())
-				to_flip += [i*512 + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)]
+				to_flip += [i*mask.shape[0] + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)]
 				self._template.flat[to_flip] ^= 1
 
 	def remove_top_and_bottom_rows(self, n: int) -> None:
@@ -234,22 +235,22 @@ class Template(object):
 	def sequences_of_0_from_sequences_of_1(self, sequences: np.ndarray) -> np.ndarray:
 		'''Given a list of sequences of 1's, computes sequences of 0's.'''
 		if sequences[0][0] == 0:
-			if sequences[-1][1] != 512:
-				result = np.append(np.ravel(sequences)[1:], 512).reshape(-1,2)
+			if sequences[-1][1] != self._template.shape[1]:
+				result = np.append(np.ravel(sequences)[1:], self._template.shape[1]).reshape(-1,2)
 			else:
 				result = np.ravel(sequences)[1:-1].reshape(-1,2)
 		else:
-			if sequences[-1][1] != 512:
-				result = np.concatenate(([0], np.ravel(sequences), [512])).reshape(-1,2)
+			if sequences[-1][1] != self._template.shape[1]:
+				result = np.concatenate(([0], np.ravel(sequences), [self._template.shape[1]])).reshape(-1,2)
 			else:
-				result = np.concatenate(([0], np.ravel(sequences), [512])).reshape(-1,2)
+				result = np.concatenate(([0], np.ravel(sequences), [self._template.shape[1]])).reshape(-1,2)
 		return result
 
 	def set_range(self, row: np.ndarray, start_index: int, end_index: int, value: int) -> None:
 		'''Sets a range of indices in a row to the given value.'''
 		row[start_index:end_index] = value
 
-	def shift(self, n):
+	def shift(self, n: int) -> None:
 		self._template = np.roll(self._template, n, axis=1)
 		if self._mask is not None:
 			self._mask = np.roll(self._mask, n, axis=1)
@@ -292,7 +293,7 @@ class Template(object):
 				cv2.imwrite(save_path, save_item)
 
 	@classmethod
-	def create(cls, rows: int, columns: int, average_sequence_size_mu: float, average_sequence_size_sigma: float):
+	def create(cls, rows: int, columns: int, average_sequence_size_mu: float, average_sequence_size_sigma: float, median_filter_rows: int = 2):
 		current = np.random.choice([0,1])
 		parts = []
 		i = 0
@@ -303,7 +304,7 @@ class Template(object):
 			i += length
 			current ^= 1
 		initial_row = [np.concatenate(parts)[:columns]]
-		template = np.repeat(initial_row, rows + 2 * 2, axis=0)
+		template = np.repeat(initial_row, rows + 2 * median_filter_rows, axis=0)
 		return cls(template.astype(np.uint8), None)
 
 	@classmethod

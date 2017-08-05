@@ -5,11 +5,10 @@ import json
 import math
 from multiprocessing import Pool, cpu_count, set_start_method
 import numpy as np
-import os
 from pathlib import Path
 from template import Template
 from timeit import default_timer as timer
-from typing import Generator, List
+from typing import Generator, Tuple, List
 import validation
 
 median_filter_rows = 2
@@ -143,7 +142,7 @@ def flip_templates(temp_ic: Template, template_hd: float) -> Tuple[Template, Tem
 	
 def produce(subdirectories: List[int]) -> None:
 	'''Produce iris-codes segragated into subdirectories.'''
-	for subject_num, (reference, probe) in enumerate(IrisCodeGenerator(len(subdirectories), 0)):
+	for subject_num, (reference, probe) in enumerate(IrisCodeGenerator(len(subdirectories))):
 		save_dir = generated_directory / Path(str(subdirectories[subject_num]))
 		reference.to_image(save_dir / Path("1.bmp"))
 		probe.to_image(save_dir / Path("2.bmp"))
