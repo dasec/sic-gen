@@ -1,15 +1,20 @@
 import copy
 import cv2
+from functools import partial
 import itertools
 import json
+import logging
 import math
 from multiprocessing import Pool, cpu_count, set_start_method
 import numpy as np
 from pathlib import Path
 from template import Template
 from timeit import default_timer as timer
-from typing import Generator, Tuple, List
+from typing import Generator, Tuple, List, Callable
 import validation
+from distributions import weibull
+
+logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', datefmt="%Y-%m-%d %H:%M:%S", level=logging.DEBUG)
 
 median_filter_rows = 2
 reference_generation_hd = 0.4625
@@ -28,10 +33,11 @@ with open("exp.json", "r") as f:
 	exp_overlaps = {float(k):float(v) for k,v in exp_overlaps.items()}
 
 class IrisCodeGenerator(object):
-	def __init__(self, to_produce: int):
+	def __init__(self, to_produce: int, hd_distribution: Callable[..., float]):
 		if not isinstance(to_produce, int) or to_produce < 0:
 			raise ValueError("Number of generated iris codes must be a positive integer, instead got:", to_produce)
 		self._to_produce = to_produce
+		self._hd_distribution = hd_distribution
 
 	def __iter__(self):
 		self._produced = 0
@@ -40,55 +46,42 @@ class IrisCodeGenerator(object):
 	def __next__(self) -> Tuple[Template, Template]:
 		'''Produces synthetic iris-code templates.'''
 		while self._produced < self._to_produce:
+			# Create, randomly shift and zigzag the initial barcode pattern
 			temp_ic = Template.create(initial_rows, initial_columns, barcode_mu, barcode_sigma)
-			temp_ic.to_image(Path("test.bmp"))
 			temp_ic.shift(np.random.randint(barcode_max_shifts, initial_columns // 2))
 			temp_ic.initial_zigzag()
 
-			seqs = temp_ic.find_sequences_of_all(1)
-			target_hd = float(weibull(5))
+			# Draw a target HD from the chosen distribution and compute parameters for template generation
+			target_hd = self._hd_distribution()
 			exp_overlap = expected_overlap(target_hd)
 			i_hd = (target_hd + exp_overlap) / 2
 			b_hd = reference_generation_hd - i_hd
+			logging.debug("Target HD: %f, Barcode HD: %f" % (target_hd, b_hd))
 
-			#print ("T-HD:", target_hd)
-			#print ("I-HD:", i_hd)
-			#print ("B-HD:", b_hd)
-			
+			# Flip barcode bits until an intermediate HD is reached
 			temp_ic = flip_barcode(temp_ic, b_hd)
+
+			# Clone the barcode and flip bits until target HD is reached between the reference and probe
 			reference, probe, a_hd = flip_templates(temp_ic, target_hd)
 
+			# Generate noise masks and add noise to the templates
 			noise_hd = target_hd - a_hd
-			#print ("A-HD:", a_hd)
-			#print ("BR-HD:", temp_ic.hamming_distance(reference)[0])
-			#print ("BP-HD:", temp_ic.hamming_distance(probe)[0])
-			#print ("N-HD:", noise_hd)
-			arch_side = np.random.choice(("l", "r", None), p=arch_side_probabilities)
-			#print ("AS:", arch_side)
-			for ic in (temp_ic, reference, probe):
+			arch_side = "l"#np.random.choice(("l", "r", None), p=arch_side_probabilities)
+			for ic in (reference, probe):
 				ic.noise(noise_ic, arch_side, noise_hd if noise_hd > 0 else None)
 				ic.remove_top_and_bottom_rows(median_filter_rows)
 				ic.expand(2)
 
 			shift = int(np.rint(2 * np.random.randn() + 2))
-			#print ("S:", shift)
 			probe.shift(shift)
+			logging.debug("Misalignment: %d" % (shift))
 
-			#print ("NM-HD:", reference.hamming_distance(probe, rotations=8))
-			#print ("M-HD:", reference.hamming_distance(probe, rotations=8, masks=True))
+			logging.debug("HD without masks: %f", reference.hamming_distance(probe, rotations=abs(shift))[0])
+			logging.debug("HD with masks: %f", reference.hamming_distance(probe, rotations=abs(shift), masks=True)[0])
 			self._produced += 1
 			return reference, probe
 		else:
 			raise StopIteration
-
-def weibull(shape: float, m:float = 0.0001, t_min: float = 0.015, t_max: float = 0.25) -> float:
-	'''Returns random values from a normalised Weibull distribution.'''
-	normalise = lambda o_min, o_max, t_min, t_max, value: ((t_max - t_min) / (o_max - o_min)) * (value - o_max) + t_max
-	X = lambda shape, U: 1.0 * (-np.log2(U)) ** (1 / shape)
-	v = X(shape, np.random.rand())
-	o_min = X(shape, 1.0)
-	o_max = X(shape, m)
-	return normalise(o_min, o_max, t_max, t_min, v)
 
 def expected_overlap(target_hd: float) -> float:
 	'''Looks up expected overlap of bit-flips between two templates.'''
@@ -107,7 +100,7 @@ def flip_barcode(temp_ic: Template, barcode_hd: float) -> Template:
 	gspace = np.geomspace(0.2, 0.15, num=temp_ic._template.shape[0])
 	hd = 0.0
 	barcode = copy.deepcopy(temp_ic)
-	while not (math.isclose(hd, barcode_hd, abs_tol=0.025) or barcode_hd < hd):
+	while not (math.isclose(hd, barcode_hd, abs_tol=0.01) or barcode_hd < hd):
 		temp_ic.majority_vote()
 		for i, row in enumerate(temp_ic._template):
 			temp_ic.flip_edge(row, gspace[i])
@@ -142,7 +135,8 @@ def flip_templates(temp_ic: Template, template_hd: float) -> Tuple[Template, Tem
 	
 def produce(subdirectories: List[int]) -> None:
 	'''Produce iris-codes segragated into subdirectories.'''
-	for subject_num, (reference, probe) in enumerate(IrisCodeGenerator(len(subdirectories))):
+	global hd_distribution
+	for subject_num, (reference, probe) in enumerate(IrisCodeGenerator(len(subdirectories), hd_distribution)):
 		save_dir = generated_directory / Path(str(subdirectories[subject_num]))
 		reference.to_image(save_dir / Path("1.bmp"))
 		probe.to_image(save_dir / Path("2.bmp"))
@@ -164,19 +158,23 @@ def validate(processes: int) -> None:
 		print (validation.bit_counts(t[2]))
 	#for template in ic_sample:
 	#	template[2].select(8, 2)
-	#logging.info("Sample of %d from the produced iris-codes selected for validation" % num_files)
+	logging.info("Sample of %d from the produced iris-codes selected for validation" % num_files)
 	validation.sequence_lengths_validation(osiris_interval, osiris_biosecure, ic_sample)
 	#validation.hamming_distance_validation(ic_sample)
-	#logging.info("Iris-code validation complete")
+	logging.info("Iris-code validation complete")
 
 if __name__ == '__main__':
-	set_start_method("spawn")
 	start = timer()
+	set_start_method("spawn")
+	logging.info("Generating iris codes")
+	#logging.info("Iris-code size: %u rows, %u columns" % (config.iris_code_rows, config.iris_code_columns))
+	#logging.info("Number of subjects: %u" % args.subjects)
+	#logging.info("Storage directory: %s" % args.directory)
 	try:
 		num_pools = cpus if cpus <= cpu_count() else cpu_count
 	except NotImplementedError:
 		num_pools = 1
-
+	hd_distribution = partial(weibull, 5)
 	subdirectories = np.array_split(range(1, subjects+1), num_pools)
 	if num_pools > 1:
 		with Pool(num_pools) as p:
@@ -188,4 +186,4 @@ if __name__ == '__main__':
 	elapsed = stop - start
 	m, s = divmod(elapsed, 60)
 	h, m = divmod(m, 60)
-	print ("Time elapsed: %d:%02d:%02d" % (h, m, s))
+	logging.info("Time elapsed: %d:%02d:%02d" % (h, m, s))

@@ -1,5 +1,6 @@
 import cv2
 import itertools
+import logging
 import numpy as np
 import os
 from pathlib import Path
@@ -21,46 +22,34 @@ def sequence_length_generator(average_sequence_size_mu: float, average_sequence_
 	while True:
 		yield int(np.rint(average_sequence_size_sigma * np.random.randn() + average_sequence_size_mu))
 
-def create_dome(mask: np.ndarray, x_position: int, span_horizontal: int, span_vertical: int, probabilitites: np.ndarray = None) -> None:
-	def get_corresponding_circle(span_horizontal: float, span_vertical: float) -> Tuple[float, float]:
-		'''Computes a circle corresponding to given spans.'''
-		radius = span_vertical / 2 + ((span_horizontal * 2) ** 2) / (8 * span_vertical)
-		x_center = mask.shape[0] - span_vertical + radius
-		return radius, x_center
+def create_ellipse(x_max: int, y_max: int, x_pos: int, y_pos: int, height: int, width: int, thickness: int, cutin_size: float) -> Tuple[np.ndarray, np.ndarray]:
+	def in_ellipse(x: np.ndarray, y: np.ndarray, x0: int, y0: int, height: int, width: int) -> np.ndarray:
+		'''Checks if points (represented as coordinate lists, x and y) are within an ellipse of the specified parameters.'''
+		t_x = (x-x0)/height
+		t_y = (y-y0)/width
+		return t_x * t_x + t_y * t_y <= 1
 
-	def in_circle(radius: float, center_x: float, center_y: float, x: float, y: float) -> bool:
-		'''Checks if a point is within a circle.'''
-		c_x = center_x - x
-		c_y = center_y - y
-		dist_squared = c_x * c_x + c_y * c_y
-		return dist_squared <= radius * radius
-
-	def around_middle(x_position: int, span_horizontal: int, x: int) -> bool:
+	def around_middle(x_position: int, y_position: int, width: int, height: int, x: int, y: int, cutin_size: float) -> bool:
 		'''Checks if point is around middle of the arch.'''
-		cutin_size = 0.05 * np.random.randn() + 0.20
-		return int(x_position - (cutin_size * span_horizontal)) < x < int(x_position + (cutin_size * span_horizontal))
+		return int(y_position - (cutin_size * width)) < y < int(y_position + (cutin_size * width))
 
-	def in_bounds(x: int, y: int) -> bool:
-		'''Checks if a point is within template size bounds.'''
-		return 0 <= x < mask.shape[0] and 0 <= y < mask.shape[1]
+	# Points of interest
+	x = np.arange(0, x_max)
+	y = np.arange(0, y_max)[:,None]
 
-	dome_o = (*get_corresponding_circle(span_horizontal, span_vertical), x_position)
-	dome1_size = np.random.randint(4,6)
-	dome0_size = np.random.randint(2,4)
-	dome_i = (*get_corresponding_circle(span_horizontal-dome1_size, span_vertical-dome1_size), x_position)
-	dome_u = (*get_corresponding_circle(span_horizontal-dome1_size-dome0_size, span_vertical-dome1_size-dome0_size), x_position)
-	all_points = list(itertools.product(range(mask.shape[0]), range(mask.shape[1])))
-	circle_i = {index for index in all_points if in_circle(*dome_i, *index)}
-	circle_o = {index for index in all_points if in_circle(*dome_o, *index)}
-	circle_u = {index for index in all_points if in_circle(*dome_u, *index)}
-	points2 = [index for index in all_points if index in circle_o]
-	points1 = [index for index in all_points if index in circle_o and index not in circle_i and not around_middle(x_position, span_horizontal, index[1])]
-	points0 = [index for index in all_points if index in circle_i and index not in circle_u and not around_middle(x_position, span_horizontal, index[1])]
-	x, y = zip(*points1)
-	mask[x, y] = np.random.random(probabilitites[x, y].shape) < probabilitites[x, y] if probabilitites is not None else 1
-	x, y = zip(*points0)
-	mask[x, y] = 0 if np.random.rand() > 0.5 else 1
-	return points2
+	# Compute the outer and lower boundary of the arch
+	outer_ellipse = in_ellipse(x, y, x_pos, y_pos, height, width)
+	inner_ellipse = in_ellipse(x, y, x_pos, y_pos, height-thickness, width-thickness)
+
+	# Create the arch by subtracting the inner boundary from the outer boundary
+	arch = np.ones(outer_ellipse.shape)
+	arch[outer_ellipse == inner_ellipse] = 0
+
+	# Remove points around the middle of the arch
+	mid = [p for p in np.transpose(np.nonzero(arch)) if around_middle(x_pos, y_pos, width, height, p[1], p[0], cutin_size)]
+	arch[tuple(zip(*mid))] = 0
+
+	return arch.T.astype(np.uint8), outer_ellipse.T
 
 class Template(object):
 	def __init__(self, template: np.ndarray, mask: np.ndarray = None):
@@ -178,13 +167,18 @@ class Template(object):
 		#mask2 = (np.random.random(probabilitites.shape) < probabilitites)
 		
 		if arch_side:
-			if arch_side == "l":
-				p2 = create_dome(arch, np.random.randint(50, 150), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
-			else: # r
-				p2 = create_dome(arch, np.random.randint(mask.shape[0]-150, mask.shape[0]-50), np.random.randint(40, 80), np.random.randint(12, 24), probabilitites=None)
+			# TODO: clean up magic numbers
+			# Get parameters for an arch
+			cutin_size = 0.05 * np.random.randn() + 0.25
+			x_max, y_max, x_pos = *self._template.shape, self._template.shape[0]
+			height, width, thickness = 15, 35, 5
+			y_pos = 50 if arch_side == "l" else y_max - 50
 			
-			dome_points = set(p2)
+			# Create the arch and a corresponding noise mask
+			arch, arch_mask = create_ellipse(*self._template.shape, self._template.shape[0], 50, 15, 35, 5, cutin_size)
+			logging.debug("Arch side: %s, (x,y): (%d,%d), (h,w,t): (%d,%d,%d)" % (arch_side, x_pos, y_pos, height, width, thickness))
 
+			# Create some noise for the area beneath the arch
 			indices = np.nonzero(arch)
 			min_x, max_x = indices[0].min(), indices[0].max()
 			min_y, max_y = indices[1].min(), indices[1].max()
@@ -192,28 +186,25 @@ class Template(object):
 			x_start = np.random.randint(0, noise_ic._template.shape[0] // 2)
 			y_start = np.random.randint(0, noise_ic._template.shape[1] // 2)
 			random_noise = noise_ic._template[x_start:x_start+x_l+1, y_start:y_start+y_l+1]
-			arch = arch.astype(np.uint8)
 			np.logical_or(random_noise, arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], out=arch[min_x:min_x+x_l+1, min_y:min_y+y_l+1], dtype=np.uint8)
-			for p in np.ndindex(arch.shape):
-				if p not in dome_points:
-					arch[p] = 0
-					
-			for p in np.ndindex(self._template.shape):
-				if p in dome_points:
-					self._template[p] = 0
+
+			# Replace the template area beneath the arch with noise
+			self._template[arch_mask] = 0
 			np.logical_or(self._template, arch, out=self._template, dtype=np.uint8)
 
-			for p in dome_points:
-				mask[p[0]][p[1]] = 1
-		self._mask = np.logical_not(mask).astype(np.uint8)
+		# Invert the mask (needed for HD calculations when templates are compared)
+		self._mask = np.logical_not(arch_mask).astype(np.uint8)
+
+		# Add some random noise
 		if noise_hd:
+			logging.debug("Random noise: %f" % noise_hd)
 			to_flip = []
 			for i in range(self._template.shape[0]):
 				seqs1 = self.find_sequences_of_row(self._template[i], 1)
 				seq1 = list(map(tuple, seqs1))
 				seq0 = list(map(tuple, self.sequences_of_0_from_sequences_of_1(seqs1)))
 				seqs = sum([(seq[0] + 1, seq[1] - 1) for seq in seq0 + seq1 if seq[1] - seq[0] > 2], ())
-				to_flip += [i*mask.shape[0] + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)]
+				to_flip += [i*arch_mask.shape[0] + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)] # More noise is added in the first (pupil) row
 				self._template.flat[to_flip] ^= 1
 
 	def remove_top_and_bottom_rows(self, n: int) -> None:
