@@ -2,15 +2,21 @@ import matplotlib.mlab as mlab
 from matplotlib import pyplot as plt
 import numpy as np
 from pathlib import Path
+from scipy.stats import describe
 from typing import Tuple, List
 
-def distribution_statistics(values: List[float]) -> Tuple[float, float, float, float, float]:
+def distribution_statistics(values: List[float]) -> Tuple[int, float, float, float, float, float, float]:
 	'''Produces some basic descriptive statistics for a distribution.'''
-	return len(values), min(values), max(values), np.mean(values), np.std(values)
+	desc = describe(values)
+	return desc.nobs, desc.minmax[0], desc.minmax[1], desc.mean, np.sqrt(desc.variance), desc.skewness, desc.kurtosis
 
 def degrees_of_freedom(mu: float, sigma: float) -> int:
 	'''Calculates the number of degrees of freedom in a distribution based on its mean and standard deviation.'''
 	return int(np.rint((mu * (1 - mu)) / (sigma * sigma)))
+
+def bit_counts_validation(ic_sample: List[np.ndarray]) -> None:
+	hws = [template[2].hamming_weight() / template[2]._template.size for template in ic_sample]
+	return distribution_statistics(hws)
 
 def bit_counts(template) -> Tuple[float, float]:
 	'''Computes fractions of 0's and 0's in a template.'''
@@ -26,9 +32,7 @@ def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) 
 	hds_genuine = []
 	hds_impostor = []
 	done = set()
-	print (ic_sample)
 	for i in range(len(ic_sample)):
-		print (i)
 		s1, i1, ic1 = ic_sample[i]
 		for j in range(i+1, len(ic_sample)):
 			s2, i2, ic2 = ic_sample[j]
@@ -41,12 +45,12 @@ def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) 
 				gen_comparisons += 1
 			done.add(((s1, i1), (s2, i2)))
 			done.add(((s2, i2), (s1, i1)))
-	count_g, minimum_g, maximum_g, mu_g, sigma_g = distribution_statistics(hds_genuine)
-	count_i, minimum_i, maximum_i, mu_i, sigma_i = distribution_statistics(hds_impostor)
+	count_g, minimum_g, maximum_g, mu_g, sigma_g, skew_g, kurt_g = distribution_statistics(hds_genuine)
+	count_i, minimum_i, maximum_i, mu_i, sigma_i, skew_i, kurt_i = distribution_statistics(hds_impostor)
 	df = degrees_of_freedom(mu_i, sigma_i)
 	plt.hist(hds_genuine, normed=True, bins=50, color="white", edgecolor="green", alpha=0.75, linewidth=2)
 	plt.hist(hds_impostor, normed=True, bins=25, color="white", edgecolor="red", alpha=0.75, linewidth=2)
-	box_text = '$N=%d$\n$\mu=%.5f$\n$\sigma=%.5f$\n$\mathit{min}=%.5f$\n$\mathit{max}=%.5f$\n$\\nu=%d$' % (count_i, mu_i, sigma_i, minimum_i, maximum_i, df)
+	box_text = '$N=%d$\n$\mu=%.5f$\n$\sigma=%.5f$\n$\mathit{min}=%.5f$\n$\mathit{max}=%.5f$\n$\\nu=%d$\n$\mathit{skew}=%.5f$\n$\mathit{ex.kurt.}=%.5f$' % (count_i, mu_i, sigma_i, minimum_i, maximum_i, df, skew_i, kurt_i)
 	plt.text(0.77, 0.975, box_text, transform=plt.gca().transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.75))
 	box_text = '$\\mathbf{Genuine}$\n$N=%d$\n$\mu=%.5f$\n$\sigma=%.5f$\n$\mathit{min}=%.5f$\n$\mathit{max}=%.5f$' % (count_g, mu_g, sigma_g, minimum_g, maximum_g)
 	plt.text(0.02, 0.975, box_text, transform=plt.gca().transAxes, fontsize=10, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.75))
@@ -99,7 +103,7 @@ def sequence_lengths_validation(*ic_samples: List[np.ndarray], path: Path = None
 			seq0 = ic[2].sequences_of_0_from_sequences_of_1(seq1)
 			seqs = np.concatenate((seq0, seq1))
 			all_sequences_lengths += [end - start for start, end in seqs]
-		count, minimum, maximum, mu, sigma = distribution_statistics(all_sequences_lengths)
+		count, minimum, maximum, mu, sigma, skew, kurt = distribution_statistics(all_sequences_lengths)
 		y, x = np.histogram(all_sequences_lengths, density=True, bins=range(1, 30 + 2))
 		plt.plot(x[:-1], y, marker=markers[i], linewidth=2, color="C{}".format(i), alpha=0.75, label=labels[i])
 			#plt.hist(all_sequences_lengths, normed=True, bins=range(1, 30 + 1), color="white", edgecolor="C{}".format(i), alpha=0.75, linewidth=2)

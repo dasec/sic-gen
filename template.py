@@ -116,9 +116,16 @@ class Template(object):
 		assert self._template.size == other._template.size, (self._template.shape, other._template.shape)
 		ic1, ic2 = (np.array(self._template[cut_rows:-cut_rows]), np.array(other._template[cut_rows:-cut_rows])) if cut_rows else (np.array(self._template), np.array(other._template))
 		if masks:
-			assert self._mask.size == other._mask.size, (self._mask.shape, other._mask.shape)
-			assert self._template.size == self._mask.size and other._template.size == other._mask.size, (self._template.shape, other._template.shape, self._mask.shape, other._mask.shape)
-			mask1, mask2 = (np.array(self._mask[cut_rows:-cut_rows]), np.array(other._mask[cut_rows:-cut_rows])) if cut_rows else (np.array(self._mask), np.array(other._mask))
+			if self._mask is None and other._mask is None:
+				logging.warning("Trying to compute HD with masks, but no masks are present - computing without")
+				mask1, mask2 = None, None
+			else:
+				assert self._mask.size == other._mask.size, (self._mask.shape, other._mask.shape)
+				assert self._template.size == self._mask.size and other._template.size == other._mask.size, (self._template.shape, other._template.shape, self._mask.shape, other._mask.shape)
+				if cut_rows is not None:
+					mask1, mask2 = (np.array(self._mask[cut_rows:-cut_rows]), np.array(other._mask[cut_rows:-cut_rows])) if cut_rows else (np.array(self._mask), np.array(other._mask))
+				else:
+					mask1, mask2 = np.array(self._mask), np.array(other._mask)
 		else:
 			mask1, mask2 = None, None
 		best_rotation = 0
@@ -143,7 +150,7 @@ class Template(object):
 			self._template[prev:i] = np.roll(self._template[prev:i], np.random.randint(-4,4))
 			prev = i
 
-	def majority_vote(self, num_rows: int = 3, split_threshold: int = 14) -> None:
+	def majority_vote(self, num_rows: int, split_threshold: int) -> None:
 		'''Performs majority voting on a template and splits too long consecutive sequences.'''
 		for i in range(0, self._template.shape[0], num_rows):
 			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
@@ -159,23 +166,20 @@ class Template(object):
 		'''Performs a 3x3 median filtering of a template.'''
 		self._template = medfilt2d(self._template).astype(np.uint8)
 
-	def noise(self, noise_ic: np.ndarray, arch_side: str = None, noise_hd: float = None) -> None:
+	def noise(self, noise_ic: np.ndarray, arch_side: str = None, noise_hd: float = None, arch_limits: dict = None) -> None:
 		'''Adds noise (eyelid arch, pupil row, random) to a template.'''
-		mask = np.zeros(self._template.shape)
-		arch = np.zeros(self._template.shape)
 		#probabilitites = np.loadtxt("mask_probabilities.txt")
 		#mask2 = (np.random.random(probabilitites.shape) < probabilitites)
 		
 		if arch_side:
-			# TODO: clean up magic numbers
 			# Get parameters for an arch
-			cutin_size = 0.05 * np.random.randn() + 0.25
+			cutin_size = arch_limits["cutin_mul"] * np.random.randn() + arch_limits["cutin_add"]
 			x_max, y_max, x_pos = *self._template.shape, self._template.shape[0]
-			height, width, thickness = 15, 35, 5
-			y_pos = 50 if arch_side == "l" else y_max - 50
+			height, width, thickness = np.random.randint(*arch_limits["h_minmax"]), np.random.randint(*arch_limits["w_minmax"]), np.random.randint(*arch_limits["t_minmax"])
+			y_pos = np.random.randint(*arch_limits["y_minmax"]) if arch_side == "l" else y_max - np.random.randint(*arch_limits["y_minmax"])
 			
 			# Create the arch and a corresponding noise mask
-			arch, arch_mask = create_ellipse(*self._template.shape, self._template.shape[0], 50, 15, 35, 5, cutin_size)
+			arch, arch_mask = create_ellipse(x_max, y_max, x_pos, y_pos, height, width, thickness, cutin_size)
 			logging.debug("Arch side: %s, (x,y): (%d,%d), (h,w,t): (%d,%d,%d)" % (arch_side, x_pos, y_pos, height, width, thickness))
 
 			# Create some noise for the area beneath the arch
@@ -192,8 +196,8 @@ class Template(object):
 			self._template[arch_mask] = 0
 			np.logical_or(self._template, arch, out=self._template, dtype=np.uint8)
 
-		# Invert the mask (needed for HD calculations when templates are compared)
-		self._mask = np.logical_not(arch_mask).astype(np.uint8)
+			# Invert the mask (needed for HD calculations when templates are compared)
+			self._mask = np.logical_not(arch_mask).astype(np.uint8)
 
 		# Add some random noise
 		if noise_hd:
@@ -204,7 +208,7 @@ class Template(object):
 				seq1 = list(map(tuple, seqs1))
 				seq0 = list(map(tuple, self.sequences_of_0_from_sequences_of_1(seqs1)))
 				seqs = sum([(seq[0] + 1, seq[1] - 1) for seq in seq0 + seq1 if seq[1] - seq[0] > 2], ())
-				to_flip += [i*arch_mask.shape[0] + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)] # More noise is added in the first (pupil) row
+				to_flip += [i*self._template.shape[0] + el for el in np.random.choice(seqs, int((0.3 if i == 0 else noise_hd*2) * len(seqs)), replace=False)] # More noise is added in the first (pupil) row
 				self._template.flat[to_flip] ^= 1
 
 	def remove_top_and_bottom_rows(self, n: int) -> None:
@@ -284,7 +288,7 @@ class Template(object):
 				cv2.imwrite(save_path, save_item)
 
 	@classmethod
-	def create(cls, rows: int, columns: int, average_sequence_size_mu: float, average_sequence_size_sigma: float, median_filter_rows: int = 2):
+	def create(cls, rows: int, columns: int, average_sequence_size_mu: float, average_sequence_size_sigma: float, median_filter_rows: int):
 		current = np.random.choice([0,1])
 		parts = []
 		i = 0
