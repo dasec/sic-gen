@@ -7,4 +7,7 @@ def weibull(shape: float, m: float = 0.0001, t_min: float = 0.05, t_max: float =
 	v = X(shape, np.random.rand())
 	o_min = X(shape, 1.0)
 	o_max = X(shape, m)
-	return normalise(o_min, o_max, t_max, t_min, v)
+	val = normalise(o_min, o_max, t_max, t_min, v)
+	while not (t_min < val < t_max):
+		val = normalise(o_min, o_max, t_max, t_min, v)
+	return val

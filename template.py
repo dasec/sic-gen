@@ -198,6 +198,9 @@ class Template(object):
 
 			# Invert the mask (needed for HD calculations when templates are compared)
 			self._mask = np.logical_not(arch_mask).astype(np.uint8)
+		else:
+			# No arch - add a dummy mask
+			self._mask = np.ones(self._template.shape, dtype=np.uint8)
 
 		# Add some random noise
 		if noise_hd:
@@ -221,11 +224,15 @@ class Template(object):
 		'''Reduces template dimensions by selecting every nth row and/or column.'''
 		def remove_every_nth(array, n):
 			return np.array([row for i, row in enumerate(array) if i % n == 0])
-		self._template = remove_every_nth(self._template, every_n_row)
-		self._template = remove_every_nth(self._template.T, every_n_column).T
+		if every_n_row > 0:
+			self._template = remove_every_nth(self._template, every_n_row)
+		if every_n_column > 0:
+			self._template = remove_every_nth(self._template.T, every_n_column).T
 		if self._mask is not None:
-			self._mask = remove_every_nth(self._mask, every_n_row)
-			self._mask = remove_every_nth(self._mask.T, every_n_column).T
+			if every_n_row > 0:
+				self._mask = remove_every_nth(self._mask, every_n_row)
+			if every_n_column > 0:
+				self._mask = remove_every_nth(self._mask.T, every_n_column).T
 
 	def sequences_of_0_from_sequences_of_1(self, sequences: np.ndarray) -> np.ndarray:
 		'''Given a list of sequences of 1's, computes sequences of 0's.'''
