@@ -1,3 +1,4 @@
+import itertools
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
 import logging
@@ -10,7 +11,7 @@ plt.rc('axes', axisbelow=True)
 
 def distribution_statistics(values: List[float]) -> Tuple[int, float, float, float, float, float, float]:
 	'''Produces some basic descriptive statistics for a distribution.'''
-	desc = describe(values)
+	desc = describe(values, nan_policy="omit")
 	return desc.nobs, desc.minmax[0], desc.minmax[1], desc.mean, np.sqrt(desc.variance), desc.skewness, desc.kurtosis
 
 def degrees_of_freedom(mu: float, sigma: float) -> int:
@@ -30,33 +31,36 @@ def bit_counts(template) -> Tuple[float, float]:
 
 def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) -> None:
 	'''Produces Hamming distance histograms and statistics about a sample of Iris-Codes.'''
-	hds_genuine = []
-	hds_impostor = []
-	hds_genuine_rot = []
-	hds_impostor_rot = []
+	max_imp = 10000000
+	all_hds = {}
+	for group in ("genuine", "genuine_rot"):
+		all_hds[group] = np.empty(len(ic_sample))
+		all_hds[group][:] = np.NAN
+	for group in ("impostor", "impostor_rot"):
+		all_hds[group] = np.empty(max_imp)
+		all_hds[group][:] = np.NAN
 	done = set()
 	rotations = 10
-
+	g, i = 0, 0
+	
 	# Compute HDs
-	for i in range(len(ic_sample)):
-		s1, i1, ic1 = ic_sample[i]
-		for j in range(i+1, len(ic_sample)):
-			s2, i2, ic2 = ic_sample[j]
-			hd, _, _ = ic1.hamming_distance(ic2, rotations=0, masks=True)
-			hd_rot, _, _ = ic1.hamming_distance(ic2, rotations=rotations, masks=True)
-			if s1 != s2 and ((s1, i1), (s2, i2)) not in done and ((s2, i2), (s1, i1)) not in done and i1 != "2" and i2 != "2":
-				hds_impostor.append(hd)
-				hds_impostor_rot.append(hd_rot)
-			elif s1 == s2:
-				hds_genuine.append(hd)
-				hds_genuine_rot.append(hd_rot)
-			done.add(((s1, i1), (s2, i2)))
-			done.add(((s2, i2), (s1, i1)))
+	for (s1,i1,ic1), (s2,i2,ic2) in itertools.combinations(ic_sample, 2):
+		hd, _, _ = ic1.hamming_distance(ic2, rotations=0, masks=True)
+		hd_rot, _, _ = ic1.hamming_distance(ic2, rotations=rotations, masks=True)
+		if s1 != s2 and i1 != "2" and i2 != "2":
+			all_hds["impostor"][i] = hd
+			all_hds["impostor_rot"][i] = hd_rot
+			i += 1
+		elif s1 == s2:
+			all_hds["genuine"][g] = hd
+			all_hds["genuine_rot"][g] = hd_rot
+			g += 1
+	all_hds = {group: hds[~np.isnan(hds)] for group, hds in all_hds.items()}
 
 	# Compute the statistics
-	count_g, minimum_g, maximum_g, mu_g, sigma_g, skew_g, kurt_g = distribution_statistics(hds_genuine_rot)
-	count_i, minimum_i, maximum_i, mu_i, sigma_i, skew_i, kurt_i = distribution_statistics(hds_impostor)
-	count_ir, minimum_ir, maximum_ir, mu_ir, sigma_ir, skew_ir, kurt_ir = distribution_statistics(hds_impostor_rot)
+	count_g, minimum_g, maximum_g, mu_g, sigma_g, skew_g, kurt_g = distribution_statistics(all_hds["genuine_rot"])
+	count_i, minimum_i, maximum_i, mu_i, sigma_i, skew_i, kurt_i = distribution_statistics(all_hds["impostor"])
+	count_ir, minimum_ir, maximum_ir, mu_ir, sigma_ir, skew_ir, kurt_ir = distribution_statistics(all_hds["impostor_rot"])
 	df_i = degrees_of_freedom(mu_i, sigma_i)
 	logging.info("Impostor unaligned distribution: Count: %d Min: %.5f Max: %.5f Mean: %.5f St.Dev.: %.5f Skewness: %.5f Ex. Kurtosis: %.5f, Degrees of freedom: %d" % (count_i, minimum_i, maximum_i, mu_i, sigma_i, skew_i, kurt_i, df_i))
 	logging.info("Impostor aligned distribution: Count: %d Min: %.5f Max: %.5f Mean: %.5f St.Dev.: %.5f Skewness: %.5f Ex. Kurtosis: %.5f" % (count_ir, minimum_ir, maximum_ir, mu_ir, sigma_ir, skew_ir, kurt_ir))
@@ -69,8 +73,8 @@ def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) 
 
 	# Impostor unaligned plot
 	ax = plt.subplot(gs[0, :])
-	weights = np.ones_like(hds_impostor)/float(len(hds_impostor))
-	plt.hist(hds_impostor, weights=weights, bins=50, color="white", edgecolor="red", alpha=0.75, linewidth=2)
+	weights = np.ones_like(all_hds["impostor"])/float(len(all_hds["impostor"]))
+	plt.hist(all_hds["impostor"], weights=weights, bins=50, color="white", edgecolor="red", alpha=0.75, linewidth=2)
 	plt.xlim(0.3, 0.7)
 	plt.margins(0.025)
 	plt.title("Histogram of impostor HDs without alignment", size=18)
@@ -80,10 +84,10 @@ def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) 
 
 	# Genuine and impostor aligned plot
 	ax = plt.subplot(gs[1, :])
-	weights_g = np.ones_like(hds_genuine_rot)/float(len(hds_genuine_rot))
-	weights_i = np.ones_like(hds_impostor_rot)/float(len(hds_impostor_rot))
-	plt.hist(hds_genuine_rot, weights=weights_g, bins=50, color="white", edgecolor="green", alpha=0.75, linewidth=2)
-	plt.hist(hds_impostor_rot, weights=weights_i, bins=50, color="white", edgecolor="red", alpha=0.75, linewidth=2)
+	weights_g = np.ones_like(all_hds["genuine_rot"])/float(len(all_hds["genuine_rot"]))
+	weights_i = np.ones_like(all_hds["impostor_rot"])/float(len(all_hds["impostor_rot"]))
+	plt.hist(all_hds["genuine_rot"], weights=weights_g, bins=50, color="white", edgecolor="green", alpha=0.75, linewidth=2)
+	plt.hist(all_hds["impostor_rot"], weights=weights_i, bins=50, color="white", edgecolor="red", alpha=0.75, linewidth=2)
 	plt.margins(0.025)
 	plt.title("Histograms of all HDs with alignment ($\pm$%d bits)" % rotations, size=18)
 	plt.xlabel("HD", size=16)
