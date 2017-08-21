@@ -51,9 +51,13 @@ def hamming_distance_validation(processes: int, ic_sample: List[np.ndarray], rot
 	# Compute the HDs
 	with Pool(processes) as p:
 		all_hds["genuine"] = p.map(partial(compute_hd, rotations=0, masks=True), pairs_genuine)
+		logging.debug("Genuine HDs calculation finished")
 		all_hds["genuine_rot"] = p.map(partial(compute_hd, rotations=rotations, masks=True), pairs_genuine)
+		logging.debug("Genuine rotated HDs calculation finished")
 		all_hds["impostor"] = p.map(partial(compute_hd, rotations=0, masks=True), pairs_impostor)
+		logging.debug("Impostor HDs calculation finished")
 		all_hds["impostor_rot"] = p.map(partial(compute_hd, rotations=rotations, masks=True), pairs_impostor)
+		logging.debug("Impostor rotated HDs calculation finished")
 
 	# Compute the statistics
 	count_g, minimum_g, maximum_g, mu_g, sigma_g, skew_g, kurt_g = distribution_statistics(all_hds["genuine_rot"])

@@ -182,15 +182,18 @@ def produce(subdirectories: List[int]) -> None:
 		reference.to_file(save_dir / Path("1.txt"))
 		probe.to_file(save_dir / Path("2.txt"))
 
+def load_synthetic_template(path: Path) -> Tuple[str, str, Template]:
+	'''Helper function for loading synthetic templates for validation.'''
+	parent_path, subject, image = path.parent, path.parent.stem, path.stem.split("_")[0]
+	return subject, image, Template.from_file(parent_path / Path(image+"_template.txt"), parent_path / Path(image+"_mask.txt"))
+
 def validate(processes: int) -> None:
 	'''Produces various statistics, which allow to determine whether or not the generated iris-codes have the desired statistical properties.'''
 	logging.info("Validating produced Iris-Codes")
 	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"]
 	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"]
-	files = list(args.directory.glob('**/*.txt'))
-	num_files = len(files)
-	synthetic_ic = sorted({(path.parent, path.parent.stem, path.stem.split("_")[0]) for path in itertools.islice(files, num_files)})
-	synthetic_ic = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in synthetic_ic]
+	synthetic_file_paths = list(args.directory.glob('**/*.txt'))
+	synthetic_ic = list(map(load_synthetic_template, synthetic_file_paths))
 	for dataset in (osiris_interval, osiris_biosecure):
 		for template in dataset:
 			template[2].select(downsampling_every_n_row, downsampling_every_n_column)
