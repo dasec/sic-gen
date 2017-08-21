@@ -41,12 +41,10 @@ def hamming_distance_validation(processes: int, ic_sample: List[np.ndarray], rot
 	all_hds = {}
 
 	# Prepare the pairs of templates to compare
-	pairs = list(itertools.combinations(ic_sample, 2))
-	pairs_genuine = [pair for pair in pairs if pair[0][0] == pair[1][0]]
-	pairs_impostor = [pair for pair in pairs if pair[0][0] != pair[1][0] and pair[0][1] != "2" and pair[1][1] != "2"]
-	if len(pairs_impostor) > max_impostor_comparisons: # If there are too many impostor pairs, randomly sample up to the max_impostor_comparisons number
-		random.shuffle(pairs_impostor)
-		pairs_impostor = pairs_impostor[:max_impostor_comparisons]
+	pairs_genuine = [pair for pair in itertools.combinations(ic_sample, 2) if pair[0][0] == pair[1][0] and pair[0][1] != pair[1][1]]
+	logging.debug("Created genuine template pairs")
+	pairs_impostor = [pair for i, pair in enumerate(itertools.combinations(ic_sample, 2)) if i < max_impostor_comparisons and pair[0][0] != pair[1][0] and pair[0][1] != "2" and pair[1][1] != "2"]
+	logging.debug("Created impostor template pairs")
 
 	# Compute the HDs
 	with Pool(processes) as p:
