@@ -23,6 +23,7 @@ def sequence_length_generator(average_sequence_size_mu: float, average_sequence_
 		yield int(np.rint(average_sequence_size_sigma * np.random.randn() + average_sequence_size_mu))
 
 def create_ellipse(x_max: int, y_max: int, x_pos: int, y_pos: int, height: int, width: int, thickness: int, cutin_size: float) -> Tuple[np.ndarray, np.ndarray]:
+	'''Creates an ellipse with the given equation parameters.'''
 	def in_ellipse(x: np.ndarray, y: np.ndarray, x0: int, y0: int, height: int, width: int) -> np.ndarray:
 		'''Checks if points (represented as coordinate lists, x and y) are within an ellipse of the specified parameters.'''
 		t_x = (x-x0)/height
@@ -75,10 +76,11 @@ class Template(object):
 		send = [slice(0, le // 2), slice(le // 2 + 1, le)]
 		random.shuffle(sstart)
 		random.shuffle(send)
-		shrink_starts, grow_starts = [ensure_bounds(el, 0, row.shape[0]) for el in starts[sstart[0]]], [ensure_bounds(el, -1, row.shape[0]) for el in starts[sstart[1]]]
-		shrink_ends, grow_ends = [ensure_bounds(el, -1, row.shape[0]) for el in ends[send[0]]], [ensure_bounds(el, 0, row.shape[0]) for el in ends[send[0]]]
-		row[shrink_starts + shrink_ends] = 0
-		row[grow_starts + grow_ends] = 1
+		shrink_starts, expand_starts = [ensure_bounds(el, 0, row.shape[0]) for el in starts[sstart[0]]], [ensure_bounds(el, -1, row.shape[0]) for el in starts[sstart[1]]]
+		shrink_ends, expand_ends = [ensure_bounds(el, -1, row.shape[0]) for el in ends[send[0]]], [ensure_bounds(el, 0, row.shape[0]) for el in ends[send[0]]]
+		to_shrink, to_expand = shrink_starts + shrink_ends, expand_starts + expand_ends
+		row[to_shrink] = 0
+		row[to_expand] = 1
 
 	def find_sequences_of_all(self, value: int) -> np.ndarray:
 		'''Finds consecutive sequences of given value for all rows in a template.'''
@@ -102,6 +104,7 @@ class Template(object):
 	def hamming_distance(self, other, rotations: int = 0, masks: bool = False, cut_rows: int = None) -> Tuple[float, int, List[float]]:
 		'''Fractional Hamming distance of two iris-codes.'''
 		def compute_hd(ic1: np.ndarray, ic2: np.ndarray, rotation: int, mask1: np.ndarray = None, mask2: np.ndarray = None) -> float:
+			'''Helper function for HD computation.'''
 			ic2_r = np.array(ic2)
 			ic2_r = np.roll(ic2_r, rotation, axis=1)
 			if all(m is not None for m in (mask1, mask2)):
@@ -156,9 +159,7 @@ class Template(object):
 			majority = (np.sum(self._template[i:i+num_rows], axis=0) >= num_rows//2+1).astype(np.uint8, copy=False)
 			seqs1 = self.find_sequences_of_row(majority, 1)
 			seqs0 = self.sequences_of_0_from_sequences_of_1(seqs1)
-			#if np.random.rand() > 0.5:
 			self.split(majority, seqs1, split_threshold)
-			#else:
 			self.split(majority, seqs0, split_threshold)
 			self._template[i:i+num_rows] = majority
 
@@ -168,9 +169,6 @@ class Template(object):
 
 	def noise(self, noise_ic: np.ndarray, arch_side: str = None, noise_hd: float = None, arch_limits: dict = None) -> None:
 		'''Adds noise (eyelid arch, pupil row, random) to a template.'''
-		#probabilitites = np.loadtxt("mask_probabilities.txt")
-		#mask2 = (np.random.random(probabilitites.shape) < probabilitites)
-		
 		if arch_side:
 			# Get parameters for an arch
 			cutin_size = arch_limits["cutin_mul"] * np.random.randn() + arch_limits["cutin_add"]
@@ -222,7 +220,8 @@ class Template(object):
 
 	def select(self, every_n_row: int, every_n_column: int) -> None:
 		'''Reduces template dimensions by selecting every nth row and/or column.'''
-		def remove_every_nth(array, n):
+		def remove_every_nth(array: np.ndarray, n: int) -> np.ndarray:
+			'''Removes every nth row from an array.'''
 			return np.array([row for i, row in enumerate(array) if i % n == 0])
 		if every_n_row > 0:
 			self._template = remove_every_nth(self._template, every_n_row)
@@ -253,6 +252,7 @@ class Template(object):
 		row[start_index:end_index] = value
 
 	def shift(self, n: int) -> None:
+		'''Applies a circular shift to a template.'''
 		self._template = np.roll(self._template, n, axis=1)
 		if self._mask is not None:
 			self._mask = np.roll(self._mask, n, axis=1)
@@ -296,6 +296,7 @@ class Template(object):
 
 	@classmethod
 	def create(cls, rows: int, columns: int, average_sequence_size_mu: float, average_sequence_size_sigma: float, median_filter_rows: int):
+		'''Creates a barcode template.'''
 		current = np.random.choice([0,1])
 		parts = []
 		i = 0
@@ -324,7 +325,8 @@ class Template(object):
 	@classmethod
 	def from_image(cls, template_path: Path, mask_path: Path = None):
 		'''Reads a template (and optionally its mask) from image(s).'''
-		def read_image(path):
+		def read_image(path: Path) -> np.ndarray:
+			'''Reads an image into an array.'''
 			template = cv2.imread(str(path), 0)
 			template[template == 0] = 1
 			template[template == 255] = 0

@@ -21,8 +21,8 @@ parser.add_argument('-n', '--subjects', action='store', type=int, nargs='?', def
 parser.add_argument('-d', '--directory', action='store', type=Path, nargs='?', default="generated", help='relative path to directory where the generated iris-codes will be stored')
 parser.add_argument('-p', '--processes', action='store', type=int, nargs='?', default=1, help='number of CPU processes to use (0 < p, defaults to cpu_count if p > cpu_count or to 1 on unsupported platforms)')
 parser.add_argument('-v', '--validate', action='store_true', help='run statistical validation after generation of templates')
-parser.add_argument('-l', '--logging', action='count', help='logging verbosity level')
-parser.add_argument('--version', action='version', version='%(prog)s 0.6')
+parser.add_argument('-l', '--logging', action='count', help='logging verbosity level (default is warning)')
+parser.add_argument('--version', action='version', version='%(prog)s 1.0')
 args = parser.parse_args()
 
 if args.logging is not None:
@@ -46,6 +46,8 @@ probe_shifts_mu_sigma = (2,5)
 barcode_mu, barcode_sigma = 6.5, 0.25
 arch_limits = {"cutin_mul": 0.05, "cutin_add": 0.25, "h_minmax": (10, 25), "w_minmax": (30, 75), "t_minmax": (3,6), "y_minmax": (40, 70)}
 flip_gspace = np.geomspace(0.2, 0.15, num=initial_rows + 2 * median_filter_rows)
+validation_rotations = 10
+validation_max_impostor_comparisons = 1000000
 
 with open("exp.json", "r") as f:
 	exp_overlaps = json.load(f)
@@ -101,6 +103,10 @@ class IrisCodeGenerator(object):
 			shift = int(np.rint(probe_shifts_mu_sigma[1] * np.random.randn() + probe_shifts_mu_sigma[0]))
 			probe.shift(shift)
 			logging.debug("Misalignment: %d" % (shift))
+
+			# Downsample
+			reference.select(downsampling_every_n_row, downsampling_every_n_column)
+			probe.select(downsampling_every_n_row, downsampling_every_n_column)
 
 			logging.debug("HD without masks: %f", reference.hamming_distance(probe, rotations=abs(shift))[0])
 			logging.debug("HD with masks: %f", reference.hamming_distance(probe, rotations=abs(shift), masks=True)[0])
@@ -183,17 +189,15 @@ def validate(processes: int) -> None:
 	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"]
 	files = list(args.directory.glob('**/*.txt'))
 	num_files = len(files)
-	num_cross_comparisons = num_files * (num_files - 1) // 2
 	synthetic_ic = sorted({(path.parent, path.parent.stem, path.stem.split("_")[0]) for path in itertools.islice(files, num_files)})
-	synthetic_ic = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in synthetic_ic[:25]]
-	for dataset in (osiris_interval, osiris_biosecure, synthetic_ic):
+	synthetic_ic = [(p[1], p[2], Template.from_file(p[0] / Path(p[2]+"_template.txt"), p[0] / Path(p[2]+"_mask.txt"))) for p in synthetic_ic]
+	for dataset in (osiris_interval, osiris_biosecure):
 		for template in dataset:
 			template[2].select(downsampling_every_n_row, downsampling_every_n_column)
 	bc_c, bc_max, bc_min, bc_mu, bc_std, bc_sk, bc_ku = validation.bit_counts_validation(synthetic_ic)
-	logging.info("Bit counts validation: Count: %d Min: %.4f Max: %.4f Mean: %.4f St.Dev.: %.4f Skewness: %.4f Ex. Kurtosis.: %.4f" % (bc_c, bc_max, bc_min, bc_mu, bc_std, bc_sk, bc_ku))
+	logging.info("Bit counts validation: Count: %d Min: %.5f Max: %.5f Mean: %.5f St.Dev.: %.5f Skewness: %.5f Ex. Kurtosis.: %.5f" % (bc_c, bc_max, bc_min, bc_mu, bc_std, bc_sk, bc_ku))
 	validation.sequence_lengths_validation(osiris_interval, osiris_biosecure, synthetic_ic, path=Path("validation_lengths.png"))
-	validation.hamming_distance_validation(synthetic_ic, path=Path("validation_hd.png"))
-	
+	validation.hamming_distance_validation(processes, synthetic_ic, validation_rotations, validation_max_impostor_comparisons, path=Path("validation_hd.png"))
 
 if __name__ == '__main__':
 	start = timer()

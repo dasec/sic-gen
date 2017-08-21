@@ -1,7 +1,9 @@
+from functools import partial
 import itertools
+import logging
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
-import logging
+from multiprocessing import Pool
 import numpy as np
 from pathlib import Path
 from scipy.stats import describe
@@ -19,43 +21,39 @@ def degrees_of_freedom(mu: float, sigma: float) -> int:
 	return int(np.rint((mu * (1 - mu)) / (sigma * sigma)))
 
 def bit_counts_validation(ic_sample: List[np.ndarray]) -> None:
+	'''Computes fractions of 0's and 1's in a template sample.'''
 	hws = [template[2].hamming_weight() / template[2]._template.size for template in ic_sample]
 	return distribution_statistics(hws)
 
 def bit_counts(template) -> Tuple[float, float]:
-	'''Computes fractions of 0's and 0's in a template.'''
+	'''Computes fractions of 0's and 1's in a template.'''
 	hw = template.hamming_weight()
 	fraction1 = hw / template._template.size
 	fraction0 = 1.0 - fraction1
 	return (fraction0, fraction1)
 
-def hamming_distance_validation(ic_sample: List[np.ndarray], path: Path = None) -> None:
+def compute_hd(pair, rotations=0, masks=False):
+	'''Helper function for parallelising HD calculations.'''
+	return pair[0][2].hamming_distance(pair[1][2], rotations=rotations, masks=masks)[0]
+
+def hamming_distance_validation(processes: int, ic_sample: List[np.ndarray], rotations: int, max_impostor_comparisons: int, path: Path = None) -> None:
 	'''Produces Hamming distance histograms and statistics about a sample of Iris-Codes.'''
-	max_imp = 10000000
 	all_hds = {}
-	for group in ("genuine", "genuine_rot"):
-		all_hds[group] = np.empty(len(ic_sample))
-		all_hds[group][:] = np.NAN
-	for group in ("impostor", "impostor_rot"):
-		all_hds[group] = np.empty(max_imp)
-		all_hds[group][:] = np.NAN
-	done = set()
-	rotations = 10
-	g, i = 0, 0
-	
-	# Compute HDs
-	for (s1,i1,ic1), (s2,i2,ic2) in itertools.combinations(ic_sample, 2):
-		hd, _, _ = ic1.hamming_distance(ic2, rotations=0, masks=True)
-		hd_rot, _, _ = ic1.hamming_distance(ic2, rotations=rotations, masks=True)
-		if s1 != s2 and i1 != "2" and i2 != "2":
-			all_hds["impostor"][i] = hd
-			all_hds["impostor_rot"][i] = hd_rot
-			i += 1
-		elif s1 == s2:
-			all_hds["genuine"][g] = hd
-			all_hds["genuine_rot"][g] = hd_rot
-			g += 1
-	all_hds = {group: hds[~np.isnan(hds)] for group, hds in all_hds.items()}
+
+	# Prepare the pairs of templates to compare
+	pairs = list(itertools.combinations(ic_sample, 2))
+	pairs_genuine = [pair for pair in pairs if pair[0][0] == pair[1][0]]
+	pairs_impostor = [pair for pair in pairs if pair[0][0] != pair[1][0] and pair[0][1] != "2" and pair[1][1] != "2"]
+	if len(pairs_impostor) > max_impostor_comparisons: # If there are too many impostor pairs, randomly sample up to the max_impostor_comparisons number
+		random.shuffle(pairs_impostor)
+		pairs_impostor = pairs_impostor[:max_impostor_comparisons]
+
+	# Compute the HDs
+	with Pool(processes) as p:
+		all_hds["genuine"] = p.map(partial(compute_hd, rotations=0, masks=True), pairs_genuine)
+		all_hds["genuine_rot"] = p.map(partial(compute_hd, rotations=rotations, masks=True), pairs_genuine)
+		all_hds["impostor"] = p.map(partial(compute_hd, rotations=0, masks=True), pairs_impostor)
+		all_hds["impostor_rot"] = p.map(partial(compute_hd, rotations=rotations, masks=True), pairs_impostor)
 
 	# Compute the statistics
 	count_g, minimum_g, maximum_g, mu_g, sigma_g, skew_g, kurt_g = distribution_statistics(all_hds["genuine_rot"])
@@ -112,20 +110,23 @@ def sequence_lengths_validation(*ic_samples: List[np.ndarray], path: Path = None
 			yield choice
 			previous = choice
 
-	# Produce sequences from Daugman HMM
-	sequences = []
-	gen = bit_generator()
-	seq = [next(gen)]
-	i = 0
-	while i < 100000:
-		bit = next(gen)
-		if seq[-1] != bit:
-			i += 1
-			sequences.append(seq)
-			seq = [bit]
-		else:
-			seq.append(bit)
-	lengths = list(map(len, sequences))
+	def daugman_hmm(items: int = 1000000) -> List[int]:
+		'''Produce sequences from Daugman HMM.'''
+		sequences = []
+		gen = bit_generator()
+		seq = [next(gen)]
+		i = 0
+		while i < items:
+			bit = next(gen)
+			if seq[-1] != bit:
+				i += 1
+				sequences.append(seq)
+				seq = [bit]
+			else:
+				seq.append(bit)
+		return sequences
+
+	lengths = list(map(len, daugman_hmm()))
 	count, minimum, maximum, mu, sigma, skew, kurt = distribution_statistics(lengths)
 	logging.info("Sequence lengths %s: Count: %d Min: %d Max: %d Mean: %.5f St.Dev.: %.5f Skewness: %.5f Ex. Kurtosis: %.5f" % ("Daugman's HMM", count, minimum, maximum, mu, sigma, skew, kurt))
 	y, x = np.histogram(lengths, density=True, bins=range(1, 30 + 3))
