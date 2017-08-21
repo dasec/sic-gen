@@ -192,8 +192,11 @@ def validate(processes: int) -> None:
 	logging.info("Validating produced Iris-Codes")
 	osiris_interval = [(p.stem[:3], p.stem[-1], Template.from_image(p, None)) for p in sorted(Path("iris_codes_interval").iterdir()) if p.stem[-1] == "1"]
 	osiris_biosecure = [(p, p, Template.from_image(p, None)) for p in sorted(Path("iris_codes_biosecure").iterdir()) if p.stem[-1] == "1"]
-	synthetic_file_paths = list(args.directory.glob('**/*.txt'))
-	synthetic_ic = list(map(load_synthetic_template, synthetic_file_paths))
+	synthetic_file_paths = list(args.directory.glob('**/*_template.txt'))
+	random.shuffle(synthetic_file_paths)
+	with Pool(processes) as p:
+		synthetic_ic = p.map(load_synthetic_template, synthetic_file_paths)
+	logging.debug("Loaded synthetic templates")
 	for dataset in (osiris_interval, osiris_biosecure):
 		for template in dataset:
 			template[2].select(downsampling_every_n_row, downsampling_every_n_column)
