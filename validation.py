@@ -1,10 +1,10 @@
-from functools import partial
 import itertools
 import logging
+import numpy as np
+from functools import partial
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
 from multiprocessing import Pool
-import numpy as np
 from pathlib import Path
 from scipy.stats import describe
 from typing import Tuple, List

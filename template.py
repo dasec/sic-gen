@@ -3,8 +3,8 @@ import itertools
 import logging
 import numpy as np
 import os
-from pathlib import Path
 import random
+from pathlib import Path
 from scipy.signal import medfilt2d
 from typing import Generator, List, Tuple
 

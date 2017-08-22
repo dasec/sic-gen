@@ -1,20 +1,18 @@
 #!/usr/bin/env python
 import argparse
 import copy
-import cv2
-from distributions import weibull
-from functools import partial
-import itertools
 import json
 import logging
 import math
-from multiprocessing import Pool, cpu_count, set_start_method
 import numpy as np
+import validation
+from distributions import weibull
+from functools import partial
+from multiprocessing import Pool, cpu_count, set_start_method
 from pathlib import Path
 from template import Template
 from timeit import default_timer as timer
-from typing import Generator, Tuple, List, Callable
-import validation
+from typing import Tuple, List, Callable
 
 parser = argparse.ArgumentParser(description='Generator of synthetic Iris-Codes.')
 parser.add_argument('-n', '--subjects', action='store', type=int, nargs='?', default=1, help='number of subjects (0 < n)')
