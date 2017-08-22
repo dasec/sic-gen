@@ -99,7 +99,8 @@ ENV/
 # mypy
 .mypy_cache/
 
-# data directories
+# data
 generated/
 iris_codes_biosecure/
 iris_codes_interval/
+*.png
