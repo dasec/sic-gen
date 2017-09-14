@@ -1,3 +1,8 @@
+__author__ = "Pawel Drozdowski"
+__copyright__ = "Copyright (C) 2017 Hochschule Darmstadt"
+__license__ = "License Agreement provided by Hochschule Darmstadt(https://github.com/dasec/sic-gen/blob/master/hda-license.pdf)"
+__version__ = "1.0"
+
 import cv2
 import itertools
 import logging
@@ -283,7 +288,7 @@ class Template(object):
 				save_path = str(path.parent / Path(str(path.stem) + name + path.suffix))
 				np.savetxt(save_path, item, fmt="%u", delimiter="", newline=os.linesep)
 
-	def to_image(self, path: Path = None) -> None:
+	def to_image(self, path: Path) -> None:
 		'''Saves a template (and mask, if present) to image file(s).'''
 		for name, item in vars(self).items():
 			if item is not None:

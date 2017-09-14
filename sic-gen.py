@@ -1,4 +1,11 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+'''Reference implementation of SIC-Gen: A Synthetic Iris-Code Generator'''
+
+__author__ = "Pawel Drozdowski"
+__copyright__ = "Copyright (C) 2017 Hochschule Darmstadt"
+__license__ = "License Agreement provided by Hochschule Darmstadt(https://github.com/dasec/sic-gen/blob/master/hda-license.pdf)"
+__version__ = "1.0"
+
 import argparse
 import copy
 import json
@@ -15,11 +22,11 @@ from timeit import default_timer as timer
 from typing import Tuple, List, Callable
 
 parser = argparse.ArgumentParser(description='Generator of synthetic Iris-Codes.')
-parser.add_argument('-n', '--subjects', action='store', type=int, nargs='?', default=1, help='number of subjects (0 < n)')
-parser.add_argument('-d', '--directory', action='store', type=Path, nargs='?', default="generated", help='relative path to directory where the generated iris-codes will be stored')
-parser.add_argument('-p', '--processes', action='store', type=int, nargs='?', default=1, help='number of CPU processes to use (0 < p, defaults to cpu_count if p > cpu_count or to 1 on unsupported platforms)')
+parser.add_argument('-n', '--subjects', action='store', type=int, nargs='?', default=1, help='number of subjects (default: 1)')
+parser.add_argument('-d', '--directory', action='store', type=Path, nargs='?', default="generated", help='relative path to directory where the generated Iris-Codes will be stored (default: /generated/)')
+parser.add_argument('-p', '--processes', action='store', type=int, nargs='?', default=1, help='number of CPU processes to use (default: 1)')
 parser.add_argument('-v', '--validate', action='store_true', help='run statistical validation after generation of templates')
-parser.add_argument('-l', '--logging', action='count', help='logging verbosity level (default is warning)')
+parser.add_argument('-l', '--logging', action='count', help='logging verbosity level (default is warning, -l for info and -ll for debug)')
 parser.add_argument('--version', action='version', version='%(prog)s 1.0')
 args = parser.parse_args()
 

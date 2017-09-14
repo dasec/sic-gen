@@ -1,3 +1,8 @@
+__author__ = "Pawel Drozdowski"
+__copyright__ = "Copyright (C) 2017 Hochschule Darmstadt"
+__license__ = "License Agreement provided by Hochschule Darmstadt(https://github.com/dasec/sic-gen/blob/master/hda-license.pdf)"
+__version__ = "1.0"
+
 import numpy as np
 
 def weibull(shape: float, m: float = 0.0001, t_min: float = 0.05, t_max: float = 0.35) -> float:

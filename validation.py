@@ -1,3 +1,8 @@
+__author__ = "Pawel Drozdowski"
+__copyright__ = "Copyright (C) 2017 Hochschule Darmstadt"
+__license__ = "License Agreement provided by Hochschule Darmstadt(https://github.com/dasec/sic-gen/blob/master/hda-license.pdf)"
+__version__ = "1.0"
+
 import itertools
 import logging
 import numpy as np
@@ -118,7 +123,7 @@ def sequence_lengths_validation(*ic_samples: List[np.ndarray], path: Path = None
 			yield choice
 			previous = choice
 
-	def daugman_hmm(items: int = 1000000) -> List[int]:
+	def daugman_hmm(items: int = 1000000) -> List[List[int]]:
 		'''Produce sequences from Daugman HMM.'''
 		sequences = []
 		gen = bit_generator()
@@ -155,7 +160,7 @@ def sequence_lengths_validation(*ic_samples: List[np.ndarray], path: Path = None
 		y, x = np.histogram(all_sequences_lengths, density=True, bins=range(1, 30 + 2))
 		plt.plot(x[:-1], y, marker=markers[i], linewidth=2, color="C{}".format(i), alpha=0.75, label=labels[i])
 	plt.title("Distribution of sequence lengths", size=18)
-	plt.xlabel("Consecutive bits", size=16)
+	plt.xlabel("Consecutive identical bits", size=16)
 	plt.ylabel("Probability density", size=16)
 	plt.xticks([1, 5, 10, 15, 20, 25, 30])
 	plt.xlim(0, 30.75)
